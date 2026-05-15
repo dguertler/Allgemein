@@ -10,43 +10,6 @@ from planning.export import build_excel
 import pandas as pd
 from datetime import date
 
-st.set_page_config(page_title="Planung ausführen", page_icon="▶️", layout="wide")
-st.title("▶️ Planung ausführen")
-require_db()
-
-conn = get_conn()
-gmbh = get_gmbh()
-st.caption(f"GmbH: **{gmbh}**")
-
-# ── Select plan year ───────────────────────────────────────────────────────
-planjahr = st.number_input("Planjahr", min_value=2024, max_value=2035,
-                            value=date.today().year + 1, step=1, key="plan_pj")
-
-# ── Load params ────────────────────────────────────────────────────────────
-param_row = conn.execute("SELECT * FROM parameter WHERE planjahr=?", (planjahr,)).fetchone()
-
-if not param_row:
-    st.warning("Keine Planungsparameter für dieses Jahr hinterlegt. Bitte zuerst unter **Parameter** konfigurieren.")
-    st.stop()
-
-def _d(val):
-    return date.fromisoformat(val) if val else None
-
-params = PlanParams(
-    planjahr=planjahr,
-    preiserhoehung_pct=param_row["preiserhoehung_pct"] or 0.0,
-    ferien_puffer_wochen=param_row["ferien_puffer_wochen"] or 3,
-    ramadan_vj_start=_d(param_row["ramadan_vj_start"]),
-    ramadan_vj_ende=_d(param_row["ramadan_vj_ende"]),
-    ramadan_plan_start=_d(param_row["ramadan_plan_start"]),
-    ramadan_plan_ende=_d(param_row["ramadan_plan_ende"]),
-    ramadan_umsatz_pct=param_row["ramadan_umsatz_pct"] or 0.0,
-    fasching_vj_start=_d(param_row["fasching_vj_start"]),
-    fasching_vj_ende=_d(param_row["fasching_vj_ende"]),
-    fasching_plan_start=_d(param_row["fasching_plan_start"]),
-    fasching_plan_ende=_d(param_row["fasching_plan_ende"]),
-    fasching_wirkung_pct=param_row["fasching_wirkung_pct"] or 0.0,
-)
 
 # ── Parameter summary ──────────────────────────────────────────────────────
 with st.expander("📋 Aktive Parameter", expanded=False):
