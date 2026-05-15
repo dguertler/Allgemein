@@ -1,0 +1,4 @@
+# Ignore all SQLite databases (GmbH-specific, not to be versioned)
+*.db
+*.db-wal
+*.db-shm
