@@ -18,7 +18,7 @@ st.set_page_config(
 ASSETS = BASE / "ui" / "assets"
 
 
-def _logo_tag(path: Path, width: int = 88) -> str:
+def _logo_tag(path: Path, width: int = 65) -> str:
     if not path.exists():
         return ""
     b64 = base64.b64encode(path.read_bytes()).decode()

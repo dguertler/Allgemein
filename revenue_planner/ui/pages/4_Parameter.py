@@ -11,7 +11,7 @@ from datetime import date, timedelta
 require_db()
 conn = get_conn()
 st.title("Planungsparameter")
-st.caption(f"GmbH: **{get_gmbh()}**")
+st.caption(f"Firma: **{get_gmbh()}**")
 
 BUNDESLAENDER = ["alle", "RP", "HE", "BY", "BW", "NW", "NI",
                  "BE", "BB", "HB", "HH", "MV", "SH", "SL", "SN", "ST", "TH"]
@@ -27,29 +27,82 @@ tabs = st.tabs(["Allgemein", "Feiertage & Sondertage", "Ferien", "Ramadan", "Fas
 # ── Tab 1: General ─────────────────────────────────────────────────────────
 with tabs[0]:
     st.subheader("Allgemeine Parameter")
-    with st.form("params_allgemein"):
-        preiserh = st.number_input(
-            "Umsatzerhöhung / Preisanpassung (%)",
-            min_value=-20.0, max_value=50.0,
-            value=float(ex.get("preiserhoehung_pct", 3.0)), step=0.1,
-            help="Gilt für alle Filialen ohne 'Kein Wachstum'-Flag"
-        )
+
+    with st.form("params_puffer"):
         puffer = st.number_input(
-            "Ferien-Pufferzeitraum (Wochen vor/nach Ferien für Ferienfaktor-Berechnung)",
+            "Ferien-Pufferzeitraum (Wochen vor/nach Ferien)",
             min_value=1, max_value=8,
-            value=int(ex.get("ferien_puffer_wochen", 3)), step=1
+            value=int(ex.get("ferien_puffer_wochen", 3)), step=1,
+            help=(
+                "Gibt an, wie viele Wochen VOR und NACH jeder Ferienzeit als Vergleichszeitraum "
+                "dienen, um den Ferienfaktor zu berechnen.\n\n"
+                "Beispiel: Sommerferien 1.–31. Juli, Puffer = 3 Wochen → Vergleich: "
+                "10.–30. Juni & 1.–21. August. Ferienfaktor = Ø Tagesumsatz Ferien ÷ "
+                "Ø Tagesumsatz Pufferzeitraum. Liegt der Faktor bei 0,85, werden in den "
+                "Ferienwochen 15 % weniger Umsatz geplant als in Normalwochen. "
+                "Empfehlung: 3 Wochen."
+            )
         )
         if st.form_submit_button("💾 Speichern"):
             conn.execute("""
-                INSERT INTO parameter (planjahr, preiserhoehung_pct, ferien_puffer_wochen)
-                VALUES (?,?,?)
+                INSERT INTO parameter (planjahr, ferien_puffer_wochen)
+                VALUES (?,?)
                 ON CONFLICT(planjahr) DO UPDATE SET
-                  preiserhoehung_pct=excluded.preiserhoehung_pct,
                   ferien_puffer_wochen=excluded.ferien_puffer_wochen
-            """, (planjahr, preiserh, puffer))
+            """, (planjahr, puffer))
             conn.commit()
             st.success("✅ Gespeichert.")
             st.rerun()
+
+    st.divider()
+    st.subheader("Umsatzwachstum je Monat (%)")
+    st.caption("Wachstumsrate gegenüber Vorjahr je Monat. 0 % = kein Wachstum.")
+
+    MONATE = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
+              "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
+
+    monat_rows = conn.execute(
+        "SELECT monat, wachstum_pct FROM parameter_monat WHERE planjahr=?", (planjahr,)
+    ).fetchall()
+    existing_pct = {r["monat"]: r["wachstum_pct"] for r in monat_rows}
+    default_pct = float(ex.get("preiserhoehung_pct", 0.0))
+    initial = {m: existing_pct.get(i + 1, default_pct) for i, m in enumerate(MONATE)}
+
+    edited = st.data_editor(
+        pd.DataFrame([initial]),
+        column_config={
+            m: st.column_config.NumberColumn(
+                m, min_value=-20.0, max_value=50.0, step=0.1, format="%.1f"
+            ) for m in MONATE
+        },
+        use_container_width=True,
+        hide_index=True,
+        key=f"wachstum_editor_{planjahr}",
+    )
+
+    vals = [float(edited[m].iloc[0]) for m in MONATE]
+    cumul, s = [], 0.0
+    for v in vals:
+        s += v
+        cumul.append(round(s, 1))
+    st.dataframe(
+        pd.DataFrame(
+            [{m: f"{c:+.1f} %" for m, c in zip(MONATE, cumul)}],
+            index=["Kumuliert"],
+        ),
+        use_container_width=True,
+    )
+
+    if st.button("💾 Wachstumsraten speichern", key="save_monat_wachstum"):
+        for i, m in enumerate(MONATE):
+            conn.execute("""
+                INSERT INTO parameter_monat (planjahr, monat, wachstum_pct)
+                VALUES (?,?,?)
+                ON CONFLICT(planjahr, monat) DO UPDATE SET wachstum_pct=excluded.wachstum_pct
+            """, (planjahr, i + 1, float(edited[m].iloc[0])))
+        conn.commit()
+        st.success("✅ Wachstumsraten gespeichert.")
+        st.rerun()
 
 # ── Tab 2: Holidays ────────────────────────────────────────────────────────
 with tabs[1]:

@@ -11,7 +11,7 @@ import pandas as pd
 require_db()
 conn = get_conn()
 st.title("IST-Umsätze importieren")
-st.caption(f"GmbH: **{get_gmbh()}**")
+st.caption(f"Firma: **{get_gmbh()}**")
 
 st.markdown("""
 Erwartet eine Datei mit mindestens drei Spalten:
@@ -22,29 +22,42 @@ Erwartet eine Datei mit mindestens drei Spalten:
 Weitere Spalten werden ignoriert.
 """)
 
+# Show result from previous import (above uploader)
+if "ist_import_result" in st.session_state:
+    result = st.session_state.pop("ist_import_result")
+    if result["type"] == "success":
+        for w in result.get("warnings", []):
+            st.warning(w)
+        st.success(result["message"])
+        if result.get("new_fil", 0) > 0:
+            st.info(f"ℹ️ {result['new_fil']} neue Filial-Einträge automatisch angelegt — bitte Bundesland unter **Filialen** prüfen.")
+    elif result["type"] == "error":
+        st.error(result["message"])
+
 uploaded = st.file_uploader("Datei hochladen (Excel oder CSV)", type=["xlsx", "xls", "csv"])
 
 if uploaded:
-    import tempfile, os
-    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded.name).suffix) as tmp:
-        tmp.write(uploaded.read())
-        tmp_path = tmp.name
-
-    try:
-        n, warnings = import_ist_umsatz(conn, tmp_path)
-        for w in warnings:
-            st.warning(w)
-        st.success(f"✅ {n:,} Datensätze importiert.")
-
-        new_fil = ensure_filialen_from_ist(conn, "RP")
-        if new_fil > 0:
-            st.info(f"ℹ️ {new_fil} neue Filial-Einträge automatisch angelegt — bitte Bundesland unter **Filialen** prüfen.")
-    except ValueError as e:
-        st.error(f"Spaltenfehler: {e}")
-    except Exception as e:
-        st.error(f"Import fehlgeschlagen: {e}")
-    finally:
-        os.unlink(tmp_path)
+    if st.button("⬆️ Importieren"):
+        try:
+            n, warnings = import_ist_umsatz(conn, uploaded, file_name=uploaded.name)
+            new_fil = ensure_filialen_from_ist(conn, "RP")
+            st.session_state["ist_import_result"] = {
+                "type": "success",
+                "message": f"✅ {n:,} Datensätze importiert.",
+                "warnings": warnings,
+                "new_fil": new_fil,
+            }
+        except ValueError as e:
+            st.session_state["ist_import_result"] = {
+                "type": "error",
+                "message": f"Spaltenfehler: {e}",
+            }
+        except Exception as e:
+            st.session_state["ist_import_result"] = {
+                "type": "error",
+                "message": f"Import fehlgeschlagen: {e}",
+            }
+        st.rerun()
 
 st.divider()
 st.subheader("Aktueller Datenbestand")
@@ -63,7 +76,14 @@ summary = pd.read_sql("""
 if summary.empty:
     st.info("Noch keine IST-Daten vorhanden.")
 else:
+    summary = summary.rename(columns={
+        "fil_nr": "Filialnummer",
+        "von": "Von",
+        "bis": "Bis",
+        "tage": "Tage",
+        "gesamt_eur": "Gesamtumsatz brutto",
+    })
     st.dataframe(summary, use_container_width=True, hide_index=True)
     col1, col2 = st.columns(2)
     col1.metric("Filialen mit IST-Daten", len(summary))
-    col2.metric("Datensätze gesamt", f"{summary['tage'].sum():,}")
+    col2.metric("Datensätze gesamt", f"{summary['Tage'].sum():,}")

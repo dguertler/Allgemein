@@ -14,7 +14,7 @@ require_db()
 conn = get_conn()
 gmbh = get_gmbh()
 st.title("Planung ausführen")
-st.caption(f"GmbH: **{gmbh}**")
+st.caption(f"Firma: **{gmbh}**")
 
 planjahr = st.number_input("Planjahr", min_value=2024, max_value=2035,
                             value=date.today().year + 1, step=1, key="plan_pj")
@@ -25,12 +25,18 @@ if not param_row:
     st.warning("Keine Planungsparameter hinterlegt. Bitte zuerst unter **Parameter** konfigurieren.")
     st.stop()
 
+monat_rows = conn.execute(
+    "SELECT monat, wachstum_pct FROM parameter_monat WHERE planjahr=?", (planjahr,)
+).fetchall()
+wachstum_monat = {r["monat"]: r["wachstum_pct"] for r in monat_rows}
+
 def _d(val):
     return date.fromisoformat(val) if val else None
 
 params = PlanParams(
     planjahr=planjahr,
     preiserhoehung_pct=param_row["preiserhoehung_pct"] or 0.0,
+    wachstum_monat=wachstum_monat,
     ferien_puffer_wochen=param_row["ferien_puffer_wochen"] or 3,
     ramadan_vj_start=_d(param_row["ramadan_vj_start"]),
     ramadan_vj_ende=_d(param_row["ramadan_vj_ende"]),
@@ -46,9 +52,16 @@ params = PlanParams(
 
 with st.expander("📋 Aktive Parameter", expanded=False):
     col1, col2, col3 = st.columns(3)
-    col1.metric("Preiserhöhung", f"{params.preiserhoehung_pct:.1f}%")
     col2.metric("Ferien-Puffer", f"{params.ferien_puffer_wochen} Wochen")
     col3.metric("Planjahr", planjahr)
+    if wachstum_monat:
+        MONATE_S = ["Jan","Feb","Mär","Apr","Mai","Jun","Jul","Aug","Sep","Okt","Nov","Dez"]
+        st.dataframe(
+            pd.DataFrame([{MONATE_S[m-1]: f"{wachstum_monat.get(m,0.0):.1f}%" for m in range(1,13)}]),
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        col1.metric("Preiserhöhung", f"{params.preiserhoehung_pct:.1f}%")
     if params.ramadan_plan_start:
         st.write(f"**Ramadan {planjahr}:** {params.ramadan_plan_start} – {params.ramadan_plan_ende} "
                  f"| sensitiver Anteil: {params.ramadan_umsatz_pct}%")

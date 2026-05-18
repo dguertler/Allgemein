@@ -1,24 +1,43 @@
 """Import IST revenue data from Excel / CSV into the database."""
+import io
 import sqlite3
 import pandas as pd
 from pathlib import Path
 
 
-def import_ist_umsatz(conn: sqlite3.Connection, file_path: str | Path) -> tuple[int, list[str]]:
+def import_ist_umsatz(
+    conn: sqlite3.Connection,
+    file_path,
+    file_name: str = "",
+) -> tuple[int, list[str]]:
     """
     Import daily actuals from a file with columns:
         Datum | Filialnummer | Umsatz brutto
     (plus optional extra columns that are ignored)
 
+    Accepts either a path (str/Path) or a file-like object (BytesIO/UploadedFile).
+
     Returns (rows_inserted, warnings).
     """
-    path = Path(file_path)
     warnings: list[str] = []
 
-    if path.suffix.lower() in (".xlsx", ".xls"):
-        df = pd.read_excel(path, dtype=str)
+    # Determine file extension for format detection
+    if hasattr(file_path, "read"):
+        # File-like object — read into BytesIO
+        data = io.BytesIO(file_path.read())
+        suffix = Path(file_name).suffix.lower() if file_name else ""
     else:
-        df = pd.read_csv(path, dtype=str, sep=None, engine="python")
+        path = Path(file_path)
+        data = path
+        suffix = path.suffix.lower()
+
+    if suffix in (".xlsx", ".xls"):
+        df = pd.read_excel(data, dtype=str)
+    else:
+        if hasattr(data, "read"):
+            df = pd.read_csv(data, dtype=str, sep=None, engine="python")
+        else:
+            df = pd.read_csv(str(data), dtype=str, sep=None, engine="python")
 
     # Flexible column mapping
     col_map = _detect_columns(df.columns.tolist())
@@ -43,15 +62,22 @@ def import_ist_umsatz(conn: sqlite3.Connection, file_path: str | Path) -> tuple[
         warnings.append(f"{bad_dates} Zeilen mit ungültigem Datum wurden übersprungen.")
     df = df.dropna(subset=["datum"])
 
-    # Normalise branch number → strip whitespace, zero-pad to 4 digits if numeric
-    df["fil_nr"] = df["fil_nr"].str.strip()
+    # Normalise branch number → strip whitespace
+    df["fil_nr"] = df["fil_nr"].astype(str).str.strip()
+
+    # Skip rows where fil_nr is empty/nan/none
+    empty_fil = df["fil_nr"].isin(["", "nan", "none", "NaN", "None"]) | df["fil_nr"].isna()
+    n_empty_fil = int(empty_fil.sum())
+    if n_empty_fil:
+        warnings.append(f"{n_empty_fil} Zeilen ohne Filialnummer wurden übersprungen.")
+    df = df[~empty_fil]
 
     # Normalise revenue → float, round to 2 decimal places
     df["umsatz"] = pd.to_numeric(df["umsatz"].str.replace(",", "."), errors="coerce").round(2)
     bad_rev = df["umsatz"].isna().sum()
     if bad_rev:
-        warnings.append(f"{bad_rev} Zeilen mit ungültigem Umsatz wurden auf 0 gesetzt.")
-    df["umsatz"] = df["umsatz"].fillna(0)
+        warnings.append(f"{bad_rev} Zeilen mit ungültigem Umsatz wurden übersprungen.")
+    df = df.dropna(subset=["umsatz"])
 
     rows = [{"fil_nr": r.fil_nr, "datum": r.datum, "umsatz": r.umsatz}
             for r in df[["fil_nr", "datum", "umsatz"]].itertuples()]

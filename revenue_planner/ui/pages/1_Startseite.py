@@ -1,4 +1,4 @@
-"""Start page: open / create a GmbH database."""
+"""Start page: open / create a Firma database."""
 import streamlit as st
 from pathlib import Path
 import sys
@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from ui.session import DATA_DIR, open_db, get_gmbh
 
 st.title("Startseite")
-st.subheader("GmbH-Datenbank auswählen oder anlegen")
+st.subheader("Firmendatenbank auswählen oder anlegen")
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 existing = sorted(p.stem.replace("_", " ") for p in DATA_DIR.glob("*.db"))
@@ -15,19 +15,19 @@ existing = sorted(p.stem.replace("_", " ") for p in DATA_DIR.glob("*.db"))
 col1, col2 = st.columns(2)
 
 with col1:
-    st.markdown("#### Bestehende GmbH öffnen")
+    st.markdown("#### Bestehende Firma öffnen")
     if existing:
-        choice = st.selectbox("GmbH auswählen", existing)
+        choice = st.selectbox("Firma auswählen", existing)
         if st.button("Öffnen", key="open_btn"):
             open_db(choice)
             st.success(f"✅ Datenbank für **{choice}** geladen.")
             st.rerun()
     else:
-        st.info("Noch keine Datenbanken vorhanden. Bitte rechts eine neue GmbH anlegen.")
+        st.info("Noch keine Datenbanken vorhanden. Bitte rechts eine neue Firma anlegen.")
 
 with col2:
-    st.markdown("#### Neue GmbH anlegen")
-    new_name = st.text_input("GmbH-Name", placeholder='z.B. "Bäckerei RLP GmbH"')
+    st.markdown("#### Neue Firma anlegen")
+    new_name = st.text_input("Firmenname", placeholder='z.B. "Bäckerei RLP GmbH"')
     if st.button("Anlegen", key="new_btn") and new_name.strip():
         open_db(new_name.strip())
         st.success(f"✅ Neue Datenbank für **{new_name.strip()}** angelegt.")
@@ -35,5 +35,5 @@ with col2:
 
 if get_gmbh():
     st.divider()
-    st.success(f"Aktive GmbH: **{get_gmbh()}**")
+    st.success(f"Aktive Firma: **{get_gmbh()}**")
     st.caption("Weiter mit der Navigation links.")

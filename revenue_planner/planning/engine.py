@@ -39,6 +39,7 @@ import holidays as hol_lib
 class PlanParams:
     planjahr: int
     preiserhoehung_pct: float = 0.0
+    wachstum_monat: dict[int, float] = field(default_factory=dict)
     ferien_puffer_wochen: int = 3
     ramadan_vj_start: date | None = None
     ramadan_vj_ende: date | None = None
@@ -297,6 +298,13 @@ class PlanningEngine:
             return st
         return None
 
+    def _growth(self, fil: dict, month: int) -> float:
+        """Monthly growth factor. Uses wachstum_monat if set, else falls back to preiserhoehung_pct."""
+        if fil.get("flag_kein_wachstum"):
+            return 1.0
+        pct = self.p.wachstum_monat.get(month, self.p.preiserhoehung_pct)
+        return 1 + pct / 100
+
     def _ferien_art_for_day(self, iso_date: str, bundesland: str) -> str | None:
         bls = self.ferien_plan_dates.get(iso_date, {})
         return bls.get(bundesland) or bls.get("alle")
@@ -344,7 +352,7 @@ class PlanningEngine:
         ls_vj = self.liefer_vj.get((fil_nr, month), 0.0)
         monat_ist_hoch = max(0.0, monat_ist_hoch - ls_vj)
 
-        growth = 1.0 if fil.get("flag_kein_wachstum") else (1 + self.p.preiserhoehung_pct / 100)
+        growth = self._growth(fil, month)
         return round(monat_ist_hoch * growth, 2)
 
     # ── Daily planning ────────────────────────────────────────────────────
@@ -352,11 +360,11 @@ class PlanningEngine:
     def plan_branch(self, fil_nr: str) -> list[DayPlan]:
         fil = self.filialen.get(fil_nr, {"bundesland": "RP"})
         bl = fil.get("bundesland", "RP")
-        growth = 1.0 if fil.get("flag_kein_wachstum") else (1 + self.p.preiserhoehung_pct / 100)
 
         results: list[DayPlan] = []
 
         for month in range(1, 13):
+            growth = self._growth(fil, month)
             monat_plan = self._monatsumsatz_plan(fil_nr, fil, month)
             wt_pct = self._weekday_pct(fil_nr, self.vj, month)
             wt_count = self._count_weekdays_in_month(self.p.planjahr, month)

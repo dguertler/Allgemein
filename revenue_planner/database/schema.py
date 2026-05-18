@@ -113,6 +113,14 @@ CREATE TABLE IF NOT EXISTS planwert_override (
     PRIMARY KEY (fil_nr, planjahr, monat)
 );
 
+-- ── Monthly growth rates ───────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS parameter_monat (
+    planjahr     INTEGER NOT NULL,
+    monat        INTEGER NOT NULL,  -- 1-12
+    wachstum_pct REAL    NOT NULL DEFAULT 0.0,
+    PRIMARY KEY (planjahr, monat)
+);
+
 -- ── Computed plan (written after each planning run) ───────────────────────
 CREATE TABLE IF NOT EXISTS planung (
     fil_nr          TEXT NOT NULL,
@@ -164,3 +172,12 @@ def _migrate(conn: sqlite3.Connection):
     for col, definition in additions:
         if col not in existing:
             conn.execute(f"ALTER TABLE filialen ADD COLUMN {col} {definition}")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS parameter_monat (
+            planjahr     INTEGER NOT NULL,
+            monat        INTEGER NOT NULL,
+            wachstum_pct REAL    NOT NULL DEFAULT 0.0,
+            PRIMARY KEY (planjahr, monat)
+        )
+    """)
