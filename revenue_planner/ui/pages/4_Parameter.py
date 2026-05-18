@@ -47,8 +47,7 @@ with tabs[0]:
             conn.execute("""
                 INSERT INTO parameter (planjahr, ferien_puffer_wochen)
                 VALUES (?,?)
-                ON CONFLICT(planjahr) DO UPDATE SET
-                  ferien_puffer_wochen=excluded.ferien_puffer_wochen
+                ON CONFLICT(planjahr) DO UPDATE SET ferien_puffer_wochen=excluded.ferien_puffer_wochen
             """, (planjahr, puffer))
             conn.commit()
             st.success("✅ Gespeichert.")
@@ -56,7 +55,7 @@ with tabs[0]:
 
     st.divider()
     st.subheader("Umsatzwachstum je Monat (%)")
-    st.caption("Wachstumsrate gegenüber Vorjahr je Monat. 0 % = kein Wachstum.")
+    st.caption("Wachstumsrate gegenüber Vorjahr je Monat. 0 % = kein Wachstum in diesem Monat.")
 
     MONATE = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
               "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
