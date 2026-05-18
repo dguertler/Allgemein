@@ -10,7 +10,7 @@ from datetime import date
 
 require_db()
 conn = get_conn()
-st.title("🆕 Neue Filialen & Lieferkunden")
+st.title("Neue Filialen & Lieferkunden")
 st.caption(f"GmbH: **{get_gmbh()}**")
 
 MONTH_DE = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun",

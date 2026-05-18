@@ -10,7 +10,7 @@ from datetime import date, timedelta
 
 require_db()
 conn = get_conn()
-st.title("⚙️ Planungsparameter")
+st.title("Planungsparameter")
 st.caption(f"GmbH: **{get_gmbh()}**")
 
 BUNDESLAENDER = ["alle", "RP", "HE", "BY", "BW", "NW", "NI",

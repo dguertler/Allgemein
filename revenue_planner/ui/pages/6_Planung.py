@@ -13,7 +13,7 @@ from datetime import date
 require_db()
 conn = get_conn()
 gmbh = get_gmbh()
-st.title("▶️ Planung ausführen")
+st.title("Planung ausführen")
 st.caption(f"GmbH: **{gmbh}**")
 
 planjahr = st.number_input("Planjahr", min_value=2024, max_value=2035,

@@ -10,7 +10,7 @@ from datetime import date, datetime
 
 require_db()
 conn = get_conn()
-st.title("🏪 Filialverwaltung")
+st.title("Filialverwaltung")
 st.caption(f"GmbH: **{get_gmbh()}**")
 
 BUNDESLAENDER = ["RP", "HE", "BY", "BW", "NW", "NI",

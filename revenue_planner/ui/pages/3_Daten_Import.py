@@ -10,7 +10,7 @@ import pandas as pd
 
 require_db()
 conn = get_conn()
-st.title("📥 IST-Umsätze importieren")
+st.title("IST-Umsätze importieren")
 st.caption(f"GmbH: **{get_gmbh()}**")
 
 st.markdown("""

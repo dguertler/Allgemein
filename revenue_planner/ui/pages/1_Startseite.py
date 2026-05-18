@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from ui.session import DATA_DIR, open_db, get_gmbh
 
-st.title("🏠 Startseite")
+st.title("Startseite")
 st.subheader("GmbH-Datenbank auswählen oder anlegen")
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
