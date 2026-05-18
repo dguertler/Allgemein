@@ -16,25 +16,42 @@ st.set_page_config(
 ASSETS = BASE / "ui" / "assets"
 
 
-def _combined_logo(paths: list, height: int = 50) -> bytes | None:
+def _combined_logo(paths: list, height: int = 48) -> bytes | None:
     try:
-        from PIL import Image
+        from PIL import Image, ImageDraw
         import io
+
         imgs = [Image.open(p).convert("RGBA") for p in paths if p.exists()]
         if not imgs:
             return None
+
+        pad_x, pad_y, gap, radius = 6, 4, 12, 6
+        inner_h = height - 2 * pad_y
+
         resized = []
         for img in imgs:
-            ratio = height / img.height
+            ratio = inner_h / img.height
             new_w = max(1, int(img.width * ratio))
-            resized.append(img.resize((new_w, height), Image.LANCZOS))
-        gap = 10
-        total_w = sum(i.width for i in resized) + gap * (len(resized) - 1)
-        canvas = Image.new("RGBA", (total_w, height), (255, 255, 255, 255))
-        x = 0
+            resized.append(img.resize((new_w, inner_h), Image.LANCZOS))
+
+        total_inner_w = sum(i.width for i in resized) + gap * (len(resized) - 1)
+        total_w = total_inner_w + 2 * pad_x
+
+        canvas = Image.new("RGBA", (total_w, height), (0, 0, 0, 0))
+
+        # Rounded white background
+        bg = Image.new("RGBA", (total_w, height), (255, 255, 255, 255))
+        mask = Image.new("L", (total_w, height), 0)
+        draw = ImageDraw.Draw(mask)
+        draw.rounded_rectangle([0, 0, total_w - 1, height - 1], radius=radius, fill=255)
+        canvas.paste(bg, mask=mask)
+
+        # Paste logos
+        x = pad_x
         for img in resized:
-            canvas.paste(img, (x, 0), img)
+            canvas.paste(img, (x, pad_y), img)
             x += img.width + gap
+
         buf = io.BytesIO()
         canvas.save(buf, "PNG")
         return buf.getvalue()

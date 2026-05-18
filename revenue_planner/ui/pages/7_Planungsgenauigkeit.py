@@ -1,4 +1,4 @@
-"""Plan accuracy page: compare planned vs prior-year actuals per day."""
+"""Plan accuracy page: compare budget vs prior-year actuals and current-year actuals per day."""
 import streamlit as st
 from pathlib import Path
 import sys
@@ -47,99 +47,111 @@ with col_c:
     else:
         selected_fil = None
 
-# ── Load data ──────────────────────────────────────────────────────────────
+# ── Load planung data ──────────────────────────────────────────────────────
 if ansicht == "Einzelne Filiale" and selected_fil:
-    rows = conn.execute(
+    plan_rows = conn.execute(
         "SELECT * FROM planung WHERE CAST(strftime('%Y', datum) AS INTEGER)=? AND fil_nr=? ORDER BY fil_nr, datum",
         (planjahr, selected_fil)
     ).fetchall()
+    ist_rows = conn.execute(
+        "SELECT fil_nr, datum, umsatz FROM ist_umsatz WHERE fil_nr=? AND datum LIKE ?",
+        (selected_fil, f"{planjahr}-%")
+    ).fetchall()
 else:
-    rows = conn.execute(
+    plan_rows = conn.execute(
         "SELECT * FROM planung WHERE CAST(strftime('%Y', datum) AS INTEGER)=? ORDER BY fil_nr, datum",
         (planjahr,)
     ).fetchall()
+    ist_rows = conn.execute(
+        "SELECT fil_nr, datum, umsatz FROM ist_umsatz WHERE datum LIKE ?",
+        (f"{planjahr}-%",)
+    ).fetchall()
 
-if not rows:
+if not plan_rows:
     st.warning("Keine Daten für die gewählte Auswahl.")
     st.stop()
+
+# IST current year lookup: (fil_nr, datum) → umsatz
+ist_lookup = {(r["fil_nr"], r["datum"]): r["umsatz"] for r in ist_rows}
+has_ist_current = len(ist_lookup) > 0
 
 WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 df = pd.DataFrame([{
-    "Filiale":       r["fil_nr"],
-    "Datum":         r["datum"],
-    "Wochentag":     WOCHENTAGE[r["wochentag"]] if r["wochentag"] is not None else "",
-    "Tagestyp":      r["tagestyp"] or "normal",
-    "Info":          " / ".join(filter(None, [r["feiertag_name"] or "", r["ferien_art"] or ""])),
-    "IST VJ €":      r["ist_vj"] or 0.0,
-    "Laden Plan €":  r["tagesumsatz_plan"] or 0.0,
-    "Liefer Plan €": r["liefer_plan"] or 0.0,
-    "Gesamt Plan €": r["gesamt_plan"] or 0.0,
-} for r in rows])
-
-df["Abw. €"]  = df["Gesamt Plan €"] - df["IST VJ €"]
-df["Abw. %"]  = df.apply(
-    lambda x: (x["Abw. €"] / x["IST VJ €"] * 100) if x["IST VJ €"] != 0 else None,
-    axis=1,
-)
+    "Filiale":   r["fil_nr"],
+    "Datum":     r["datum"],
+    "Wochentag": WOCHENTAGE[r["wochentag"]] if r["wochentag"] is not None else "",
+    "Tagestyp":  r["tagestyp"] or "normal",
+    "Info":      " / ".join(filter(None, [r["feiertag_name"] or "", r["ferien_art"] or ""])),
+    "IST VJ €":  r["ist_vj"] or 0.0,
+    "Budget €":  r["tagesumsatz_plan"] or 0.0,
+    "IST €":     ist_lookup.get((r["fil_nr"], r["datum"])),
+} for r in plan_rows])
 
 # ── Aggregate if "Gesamt aggregiert" ──────────────────────────────────────
 if ansicht == "Gesamt aggregiert":
     df = (df.groupby("Datum", as_index=False)
             .agg({
-                "Wochentag":     "first",
-                "Tagestyp":      "first",
-                "Info":          lambda x: " / ".join(filter(None, x.unique())),
-                "IST VJ €":      "sum",
-                "Laden Plan €":  "sum",
-                "Liefer Plan €": "sum",
-                "Gesamt Plan €": "sum",
+                "Wochentag": "first",
+                "Tagestyp":  "first",
+                "Info":      lambda x: " / ".join(filter(None, x.unique())),
+                "IST VJ €":  "sum",
+                "Budget €":  "sum",
+                "IST €":     lambda x: x.sum() if x.notna().any() else None,
             }))
-    df["Abw. €"] = df["Gesamt Plan €"] - df["IST VJ €"]
-    df["Abw. %"] = df.apply(
-        lambda x: (x["Abw. €"] / x["IST VJ €"] * 100) if x["IST VJ €"] != 0 else None,
-        axis=1,
-    )
-    display_cols = ["Datum", "Wochentag", "Tagestyp", "Info",
-                    "IST VJ €", "Laden Plan €", "Liefer Plan €", "Gesamt Plan €",
-                    "Abw. €", "Abw. %"]
-else:
-    display_cols = ["Filiale", "Datum", "Wochentag", "Tagestyp", "Info",
-                    "IST VJ €", "Laden Plan €", "Liefer Plan €", "Gesamt Plan €",
-                    "Abw. €", "Abw. %"]
+
+# Abweichung IST vs Budget (only where current IST exists)
+df["Abw. €"] = df.apply(
+    lambda x: round(x["IST €"] - x["Budget €"], 2) if pd.notna(x["IST €"]) else None,
+    axis=1,
+)
+df["Abw. %"] = df.apply(
+    lambda x: round((x["Abw. €"] / x["Budget €"] * 100), 1)
+    if pd.notna(x.get("Abw. €")) and x["Budget €"] != 0 else None,
+    axis=1,
+)
 
 # ── Summary metrics ────────────────────────────────────────────────────────
-total_ist  = df["IST VJ €"].sum()
-total_plan = df["Gesamt Plan €"].sum()
-total_abw  = total_plan - total_ist
-total_abw_pct = (total_abw / total_ist * 100) if total_ist != 0 else 0.0
+total_ist_vj  = df["IST VJ €"].sum()
+total_budget  = df["Budget €"].sum()
+total_ist_cur = df["IST €"].sum() if has_ist_current else None
 
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("IST Vorjahr",   f"{total_ist:,.0f} €")
-m2.metric("Plan Gesamt",   f"{total_plan:,.0f} €")
-m3.metric("Abweichung €",  f"{total_abw:+,.0f} €")
-m4.metric("Abweichung %",  f"{total_abw_pct:+.1f} %")
+m_cols = st.columns(4 if has_ist_current else 2)
+m_cols[0].metric("IST Vorjahr", f"{total_ist_vj:,.0f} €")
+m_cols[1].metric("Budget",      f"{total_budget:,.0f} €")
+if has_ist_current and total_ist_cur is not None:
+    abw_eur = total_ist_cur - total_budget
+    abw_pct = (abw_eur / total_budget * 100) if total_budget != 0 else 0.0
+    m_cols[2].metric("IST aktuell",   f"{total_ist_cur:,.0f} €")
+    m_cols[3].metric("Abw. IST/Budget", f"{abw_eur:+,.0f} € ({abw_pct:+.1f} %)")
 
 st.divider()
 
-# ── Table display ──────────────────────────────────────────────────────────
-euro_fmt   = st.column_config.NumberColumn(format="%.0f €")
-pct_fmt    = st.column_config.NumberColumn(format="%.1f %%")
+# ── Table ──────────────────────────────────────────────────────────────────
+euro_fmt = st.column_config.NumberColumn(format="%.0f €")
+pct_fmt  = st.column_config.NumberColumn(format="%.1f %%")
 
-col_cfg = {
-    "IST VJ €":      euro_fmt,
-    "Laden Plan €":  euro_fmt,
-    "Liefer Plan €": euro_fmt,
-    "Gesamt Plan €": euro_fmt,
-    "Abw. €":        euro_fmt,
-    "Abw. %":        pct_fmt,
-}
+if ansicht == "Gesamt aggregiert":
+    display_cols = ["Datum", "Wochentag", "Tagestyp", "Info",
+                    "IST VJ €", "Budget €", "IST €", "Abw. €", "Abw. %"]
+else:
+    display_cols = ["Filiale", "Datum", "Wochentag", "Tagestyp", "Info",
+                    "IST VJ €", "Budget €", "IST €", "Abw. €", "Abw. %"]
+
+if not has_ist_current:
+    display_cols = [c for c in display_cols if c not in ("IST €", "Abw. €", "Abw. %")]
 
 st.dataframe(
     df[display_cols],
     use_container_width=True,
     hide_index=True,
-    column_config=col_cfg,
+    column_config={
+        "IST VJ €": euro_fmt,
+        "Budget €": euro_fmt,
+        "IST €":    euro_fmt,
+        "Abw. €":   euro_fmt,
+        "Abw. %":   pct_fmt,
+    },
     height=500,
 )
 
@@ -150,9 +162,9 @@ with st.spinner("Excel wird erstellt…"):
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df[display_cols].to_excel(writer, index=False, sheet_name="Planungsgenauigkeit")
         ws = writer.sheets["Planungsgenauigkeit"]
-        for col_cells in ws.iter_cols(min_row=1, max_row=1):
-            for cell in col_cells:
-                cell.font = __import__("openpyxl").styles.Font(bold=True)
+        from openpyxl.styles import Font
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
     excel_bytes = buf.getvalue()
 
 suffix = f"_{selected_fil}" if selected_fil else f"_{ansicht.replace(' ', '_')}"

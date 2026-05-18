@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from ui.session import get_conn, get_gmbh, require_db
-from database.importer import import_ist_umsatz, ensure_filialen_from_ist
+from database.importer import import_ist_umsatz, _detect_columns
 import pandas as pd
 
 require_db()
@@ -29,8 +29,6 @@ if "ist_import_result" in st.session_state:
         for w in result.get("warnings", []):
             st.warning(w)
         st.success(result["message"])
-        if result.get("new_fil", 0) > 0:
-            st.info(f"ℹ️ {result['new_fil']} neue Filial-Einträge automatisch angelegt — bitte Bundesland unter **Filialen** prüfen.")
     elif result["type"] == "error":
         st.error(result["message"])
 
@@ -45,19 +43,37 @@ uploaded = st.file_uploader(
 
 if st.button("⬆️ Importieren", type="primary", disabled=uploaded is None):
     try:
+        # Validate: all fil_nrs in the file must exist in filialen
+        uploaded.seek(0)
+        if uploaded.name.lower().endswith((".xlsx", ".xls")):
+            _df_chk = pd.read_excel(uploaded, dtype=str)
+        else:
+            _df_chk = pd.read_csv(uploaded, dtype=str, sep=None, engine="python")
+        uploaded.seek(0)
+
+        _col_map = _detect_columns(_df_chk.columns.tolist())
+        if _col_map.get("fil_nr"):
+            _raw_fils = _df_chk[_col_map["fil_nr"]].astype(str).str.strip()
+            _fils_in_file = {v for v in _raw_fils if v.lower() not in ("", "nan", "none", "nat")}
+            _fils_in_db = {r[0] for r in conn.execute("SELECT fil_nr FROM filialen").fetchall()}
+            _missing = sorted(_fils_in_file - _fils_in_db)
+            if _missing:
+                raise ValueError(
+                    f"{len(_missing)} Filialnummer(n) nicht in den Stammdaten vorhanden: "
+                    f"**{', '.join(_missing)}**. Bitte zuerst unter **Filialen** anlegen."
+                )
+
         n, warnings = import_ist_umsatz(conn, uploaded, file_name=uploaded.name)
-        new_fil = ensure_filialen_from_ist(conn, "RP")
         st.session_state["ist_import_result"] = {
             "type": "success",
             "message": f"✅ {n:,} Datensätze importiert.",
             "warnings": warnings,
-            "new_fil": new_fil,
         }
         st.session_state["ist_upload_key"] += 1
     except ValueError as e:
         st.session_state["ist_import_result"] = {
             "type": "error",
-            "message": f"Spaltenfehler: {e}",
+            "message": f"Import abgebrochen: {e}",
         }
     except Exception as e:
         st.session_state["ist_import_result"] = {
