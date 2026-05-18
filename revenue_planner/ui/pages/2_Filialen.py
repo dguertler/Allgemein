@@ -51,13 +51,18 @@ with tab1:
     else:
         st.markdown(f"**{len(df)} Filialen** in der Datenbank")
 
-        display = df[["fil_nr", "bezeichnung", "bundesland", "eroeffnung",
-                       "flag_kein_wachstum", "flag_inaktiv"]].copy()
+        show_cols = [c for c in ["fil_nr", "bezeichnung", "bundesland", "eroeffnung",
+                                  "flag_kein_wachstum", "flag_inaktiv"] if c in df.columns]
+        display = df[show_cols].copy()
         display["eroeffnung"] = display["eroeffnung"].apply(_fmt_date)
-        display["flag_kein_wachstum"] = display["flag_kein_wachstum"].apply(lambda x: "✅" if x else "")
-        display["flag_inaktiv"] = display["flag_inaktiv"].apply(lambda x: "✅" if x else "")
-        display.columns = ["Fil.-Nr.", "Bezeichnung", "Bundesland",
-                           "Eröffnung", "Kein Wachstum", "Inaktiv"]
+        if "flag_kein_wachstum" in display.columns:
+            display["flag_kein_wachstum"] = display["flag_kein_wachstum"].apply(lambda x: "✅" if x else "")
+        if "flag_inaktiv" in display.columns:
+            display["flag_inaktiv"] = display["flag_inaktiv"].apply(lambda x: "✅" if x else "")
+        display = display.rename(columns={
+            "fil_nr": "Fil.-Nr.", "bezeichnung": "Bezeichnung", "bundesland": "Bundesland",
+            "eroeffnung": "Eröffnung", "flag_kein_wachstum": "Kein Wachstum", "flag_inaktiv": "Inaktiv"
+        })
         st.dataframe(display, use_container_width=True, hide_index=True)
 
         st.divider()
@@ -194,20 +199,39 @@ with tab3:
                 st.dataframe(imp.head(10), use_container_width=True)
 
                 if st.button("⬆️ Importieren (bisherige Daten werden überschrieben)", type="primary"):
-                    # Full overwrite: delete existing, insert new
                     conn.execute("DELETE FROM filialen")
-                    for _, row in imp.iterrows():
+                    imported, skipped = 0, []
+
+                    for idx, row in imp.iterrows():
+                        fil_nr = str(row.get("fil_nr", "")).strip()
+                        bl     = str(row.get("bundesland", "")).strip().upper().replace("DE-", "")
+
+                        if not fil_nr:
+                            skipped.append({"Zeile": idx + 2, "Grund": "Filialnummer fehlt",
+                                            "Daten": row.get("bezeichnung", "")})
+                            continue
+                        if not bl:
+                            skipped.append({"Zeile": idx + 2, "Grund": "Bundesland fehlt",
+                                            "Filialnummer": fil_nr})
+                            continue
+
                         conn.execute("""
                             INSERT INTO filialen (fil_nr, bundesland, bezeichnung, eroeffnung)
                             VALUES (?,?,?,?)
                         """, (
-                            str(row["fil_nr"]),
-                            str(row.get("bundesland", "RP")),
+                            fil_nr, bl,
                             str(row.get("bezeichnung", "")) or None,
-                            row.get("eroeffnung"),
+                            row.get("eroeffnung") if pd.notna(row.get("eroeffnung", None)) else None,
                         ))
+                        imported += 1
+
                     conn.commit()
-                    st.success(f"✅ {len(imp)} Filialen importiert. Alle bisherigen Daten wurden ersetzt.")
+                    st.success(f"✅ {imported} Filialen importiert. Alle bisherigen Daten wurden ersetzt.")
+
+                    if skipped:
+                        st.warning(f"⚠️ {len(skipped)} Zeilen wurden ignoriert:")
+                        st.dataframe(pd.DataFrame(skipped), use_container_width=True, hide_index=True)
+
                     st.rerun()
         except Exception as e:
             st.error(f"Fehler beim Lesen der Datei: {e}")
