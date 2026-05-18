@@ -377,13 +377,19 @@ class PlanningEngine:
                 )
                 ist_vj_val = float(self.ist_df.loc[ist_mask, "umsatz"].sum())
 
-                # Closed?
-                if fil.get("flag_inaktiv"):
-                    ende = fil.get("eroeffnung_ende")
-                    if ende and d >= date.fromisoformat(ende):
-                        daily.append({"d": d, "typ": "geschlossen", "umsatz": 0.0,
-                                      "ist_vj": ist_vj_val, "feiertag": "", "ferien": ""})
-                        continue
+                # Before opening?
+                eroeff = fil.get("eroeffnung")
+                if eroeff and date.fromisoformat(eroeff) > d:
+                    daily.append({"d": d, "typ": "geschlossen", "umsatz": 0.0,
+                                  "ist_vj": ist_vj_val, "feiertag": "", "ferien": ""})
+                    continue
+
+                # After closing? (eroeffnung_ende = last open day)
+                ende = fil.get("eroeffnung_ende")
+                if ende and date.fromisoformat(ende) < d:
+                    daily.append({"d": d, "typ": "geschlossen", "umsatz": 0.0,
+                                  "ist_vj": ist_vj_val, "feiertag": "", "ferien": ""})
+                    continue
 
                 # Feiertag?
                 ft = self._is_relevant_feiertag(iso, bl)
