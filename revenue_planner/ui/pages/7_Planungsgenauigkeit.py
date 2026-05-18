@@ -116,14 +116,17 @@ total_ist_vj  = df["IST VJ €"].sum()
 total_budget  = df["Budget €"].sum()
 total_ist_cur = df["IST €"].sum() if has_ist_current else None
 
-m_cols = st.columns(4 if has_ist_current else 2)
+m_cols = st.columns(4)
 m_cols[0].metric("IST Vorjahr", f"{total_ist_vj:,.0f} €")
 m_cols[1].metric("Budget",      f"{total_budget:,.0f} €")
 if has_ist_current and total_ist_cur is not None:
     abw_eur = total_ist_cur - total_budget
     abw_pct = (abw_eur / total_budget * 100) if total_budget != 0 else 0.0
-    m_cols[2].metric("IST aktuell",   f"{total_ist_cur:,.0f} €")
+    m_cols[2].metric("IST aktuell",     f"{total_ist_cur:,.0f} €")
     m_cols[3].metric("Abw. IST/Budget", f"{abw_eur:+,.0f} € ({abw_pct:+.1f} %)")
+else:
+    m_cols[2].metric("IST aktuell",     "– (noch kein Import)")
+    m_cols[3].metric("Abw. IST/Budget", "–")
 
 st.divider()
 
@@ -137,9 +140,6 @@ if ansicht == "Gesamt aggregiert":
 else:
     display_cols = ["Filiale", "Datum", "Wochentag", "Tagestyp", "Info",
                     "IST VJ €", "Budget €", "IST €", "Abw. €", "Abw. %"]
-
-if not has_ist_current:
-    display_cols = [c for c in display_cols if c not in ("IST €", "Abw. €", "Abw. %")]
 
 st.dataframe(
     df[display_cols],

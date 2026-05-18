@@ -16,40 +16,43 @@ st.set_page_config(
 ASSETS = BASE / "ui" / "assets"
 
 
-def _combined_logo(paths: list, height: int = 48) -> bytes | None:
+import base64
+
+
+def _logo_tag(path: Path, width: int = 65) -> str:
+    if not path.exists():
+        return ""
+    b64 = base64.b64encode(path.read_bytes()).decode()
+    ext = path.suffix.lstrip(".")
+    return (
+        f'<img src="data:image/{ext};base64,{b64}" '
+        f'style="width:{width}px;background:#fff;padding:4px 6px;'
+        f'border-radius:5px;object-fit:contain;">'
+    )
+
+
+def _combined_logo_bytes(paths: list, height: int = 44) -> bytes | None:
+    """Build a combined PNG for st.logo() – plain white background, no transparency."""
     try:
-        from PIL import Image, ImageDraw
+        from PIL import Image
         import io
 
         imgs = [Image.open(p).convert("RGBA") for p in paths if p.exists()]
         if not imgs:
             return None
 
-        pad_x, pad_y, gap, radius = 6, 4, 12, 6
-        inner_h = height - 2 * pad_y
-
+        gap = 10
         resized = []
         for img in imgs:
-            ratio = inner_h / img.height
+            ratio = height / img.height
             new_w = max(1, int(img.width * ratio))
-            resized.append(img.resize((new_w, inner_h), Image.LANCZOS))
+            resized.append(img.resize((new_w, height), Image.LANCZOS))
 
-        total_inner_w = sum(i.width for i in resized) + gap * (len(resized) - 1)
-        total_w = total_inner_w + 2 * pad_x
-
-        canvas = Image.new("RGBA", (total_w, height), (0, 0, 0, 0))
-
-        # Rounded white background
-        bg = Image.new("RGBA", (total_w, height), (255, 255, 255, 255))
-        mask = Image.new("L", (total_w, height), 0)
-        draw = ImageDraw.Draw(mask)
-        draw.rounded_rectangle([0, 0, total_w - 1, height - 1], radius=radius, fill=255)
-        canvas.paste(bg, mask=mask)
-
-        # Paste logos
-        x = pad_x
+        total_w = sum(i.width for i in resized) + gap * (len(resized) - 1)
+        canvas = Image.new("RGB", (total_w, height), (255, 255, 255))
+        x = 0
         for img in resized:
-            canvas.paste(img, (x, pad_y), img)
+            canvas.paste(img, (x, 0), img)
             x += img.width + gap
 
         buf = io.BytesIO()
@@ -59,9 +62,31 @@ def _combined_logo(paths: list, height: int = 48) -> bytes | None:
         return None
 
 
-logo_bytes = _combined_logo([ASSETS / "goertz_logo.png", ASSETS / "papperts_logo.png"])
-if logo_bytes:
-    st.logo(logo_bytes, size="large")
+# ── Logos: st.logo() places above nav; CSS replicates the old HTML styling ─
+_logo_bytes = _combined_logo_bytes([ASSETS / "goertz_logo.png", ASSETS / "papperts_logo.png"])
+if _logo_bytes:
+    st.logo(_logo_bytes, size="large")
+    st.markdown("""
+<style>
+[data-testid="stSidebarHeader"] img {
+    background: #ffffff !important;
+    padding: 4px 6px !important;
+    border-radius: 5px !important;
+    object-fit: contain !important;
+}
+</style>
+""", unsafe_allow_html=True)
+else:
+    # Fallback: HTML logos in sidebar when Pillow unavailable
+    with st.sidebar:
+        g = _logo_tag(ASSETS / "goertz_logo.png")
+        p_tag = _logo_tag(ASSETS / "papperts_logo.png")
+        if g or p_tag:
+            st.markdown(
+                f'<div style="display:flex;gap:10px;align-items:center;padding:6px 0 4px 0;">{g}{p_tag}</div>',
+                unsafe_allow_html=True,
+            )
+            st.divider()
 
 # ── Navigation ─────────────────────────────────────────────────────────────
 pages = st.navigation([
