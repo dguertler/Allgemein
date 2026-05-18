@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS filialen (
     bezeichnung     TEXT,
     bundesland      TEXT NOT NULL,          -- DE-RP, DE-HE, DE-BY …
     ort             TEXT,
-    eroeffnung      TEXT,                   -- ISO date; NULL = bestehendflag_kein_wachstum   INTEGER NOT NULL DEFAULT 0,   -- 1 = kein % Aufschlag
+    eroeffnung      TEXT,                   -- ISO date; NULL = bestehend
+    flag_kein_wachstum   INTEGER NOT NULL DEFAULT 0,   -- 1 = kein % Aufschlag
     flag_manuell    INTEGER NOT NULL DEFAULT 0,   -- 1 = Monatswert wird überschrieben
     flag_neue_filiale INTEGER NOT NULL DEFAULT 0, -- 1 = neue Filiale (manueller Planwert)
     flag_inaktiv    INTEGER NOT NULL DEFAULT 0,   -- 1 = ab eroeffnung_ende geschlossen
@@ -146,5 +147,20 @@ def init_db(db_path: str | Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(DDL)
+    _migrate(conn)
     conn.commit()
     return conn
+
+
+def _migrate(conn: sqlite3.Connection):
+    """Add columns that were missing due to schema bugs in earlier versions."""
+    existing = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(filialen)").fetchall()
+    }
+    additions = [
+        ("flag_kein_wachstum", "INTEGER NOT NULL DEFAULT 0"),
+    ]
+    for col, definition in additions:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE filialen ADD COLUMN {col} {definition}")

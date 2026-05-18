@@ -84,22 +84,22 @@ with tab1:
                 bezeichnung = st.text_input("Bezeichnung", value=row.get("bezeichnung") or "")
                 bl_idx = BUNDESLAENDER.index(row["bundesland"]) if row["bundesland"] in BUNDESLAENDER else 0
                 bundesland = st.selectbox("Bundesland", BUNDESLAENDER, index=bl_idx)
+            with col2:
                 eroeffnung_in = st.text_input(
                     "Eröffnungsdatum",
                     value=_fmt_date(row.get("eroeffnung")),
                     placeholder="TT.MM.JJJJ  (leer = Bestandsfiliale)",
                     help="Neue Filialen werden automatisch erkannt, wenn ein Eröffnungsdatum im Planjahr eingetragen ist."
                 )
-            with col2:
-                kein_wachstum = st.checkbox(
-                    "Kein Wachstum", value=bool(row.get("flag_kein_wachstum")),
-                    help="Diese Filiale erhält keine prozentuale Umsatzsteigerung."
-                )
                 eroeffnung_ende_in = st.text_input(
                     "Schließdatum",
                     value=_fmt_date(row.get("eroeffnung_ende")),
                     placeholder="TT.MM.JJJJ  (leer = dauerhaft geöffnet)",
                     help="Letzter Öffnungstag. Ab dem Folgetag wird kein Umsatz mehr geplant."
+                )
+                kein_wachstum = st.checkbox(
+                    "Kein Wachstum", value=bool(row.get("flag_kein_wachstum")),
+                    help="Diese Filiale erhält keine prozentuale Umsatzsteigerung."
                 )
 
             if st.form_submit_button("💾 Speichern"):

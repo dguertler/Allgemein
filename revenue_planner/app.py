@@ -1,6 +1,7 @@
 """Streamlit entry point with explicit page navigation."""
 import streamlit as st
 from pathlib import Path
+import base64
 import sys
 
 BASE = Path(__file__).parent
@@ -16,21 +17,34 @@ st.set_page_config(
 # ── Sidebar: company logos ─────────────────────────────────────────────────
 ASSETS = BASE / "ui" / "assets"
 
-with st.sidebar:
-    goertz   = ASSETS / "goertz_logo.png"
-    papperts = ASSETS / "papperts_logo.png"
 
-    if goertz.exists() or papperts.exists():
-        cols = st.columns(2)
-        if goertz.exists():
-            cols[0].image(str(goertz), use_container_width=True)
-        if papperts.exists():
-            cols[1].image(str(papperts), use_container_width=True)
+def _logo_tag(path: Path, width: int = 88) -> str:
+    if not path.exists():
+        return ""
+    b64 = base64.b64encode(path.read_bytes()).decode()
+    ext = path.suffix.lstrip(".")
+    return (
+        f'<img src="data:image/{ext};base64,{b64}" '
+        f'style="width:{width}px;background:#fff;padding:4px 6px;'
+        f'border-radius:5px;object-fit:contain;">'
+    )
+
+
+with st.sidebar:
+    g = _logo_tag(ASSETS / "goertz_logo.png")
+    p = _logo_tag(ASSETS / "papperts_logo.png")
+
+    if g or p:
+        st.markdown(
+            f'<div style="display:flex;gap:10px;align-items:center;'
+            f'padding:6px 0 4px 0;">{g}{p}</div>',
+            unsafe_allow_html=True,
+        )
         st.divider()
     else:
         st.markdown(
-            "<div style='text-align:center; padding: 8px 0 12px 0;"
-            " font-size:13px; color:#666; letter-spacing:.05em;'>"
+            "<div style='text-align:center;padding:8px 0 12px 0;"
+            "font-size:13px;color:#666;letter-spacing:.05em;'>"
             "FILIALUMSATZPLANUNG</div>",
             unsafe_allow_html=True,
         )
