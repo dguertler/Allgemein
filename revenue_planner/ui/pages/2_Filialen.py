@@ -170,45 +170,87 @@ with tab3:
             else:
                 imp = pd.read_excel(uploaded, dtype=str)
 
-            # Flexible column mapping (German and internal names)
-            col_map = {}
-            for col in imp.columns:
+            all_cols = imp.columns.tolist()
+            NONE_OPTION = "— nicht vorhanden —"
+            options_required = all_cols
+            options_optional = [NONE_OPTION] + all_cols
+
+            # Auto-detect columns
+            auto = {}
+            for col in all_cols:
                 c = col.lower().strip()
                 if "filial" in c or c == "fil_nr":
-                    col_map["fil_nr"] = col
+                    auto.setdefault("fil_nr", col)
                 elif "bundesland" in c:
-                    col_map["bundesland"] = col
+                    auto.setdefault("bundesland", col)
                 elif "bezeichnung" in c or "name" in c:
-                    col_map["bezeichnung"] = col
+                    auto.setdefault("bezeichnung", col)
                 elif "eröffnung" in c or "eroeffnung" in c or "datum" in c:
-                    col_map["eroeffnung"] = col
+                    auto.setdefault("eroeffnung", col)
 
-            if "fil_nr" not in col_map or "bundesland" not in col_map:
-                st.error(f"Fehlende Pflichtfelder. Gefundene Spalten: {imp.columns.tolist()}\n"
-                         f"Erwartet: 'Filialnummer' und 'Bundesland'")
+            st.markdown("**Spaltenzuordnung** *(automatisch erkannt — bei Bedarf anpassen)*")
+            col1, col2, col3, col4 = st.columns(4)
+
+            def _idx(lst, val):
+                return lst.index(val) if val in lst else 0
+
+            with col1:
+                map_fil_nr = st.selectbox(
+                    "Filialnummer *(Pflicht)*",
+                    options_required,
+                    index=_idx(options_required, auto.get("fil_nr", all_cols[0])),
+                    key="map_fil_nr",
+                )
+            with col2:
+                map_bundesland = st.selectbox(
+                    "Bundesland *(Pflicht)*",
+                    options_required,
+                    index=_idx(options_required, auto.get("bundesland", all_cols[0])),
+                    key="map_bundesland",
+                )
+            with col3:
+                map_bezeichnung = st.selectbox(
+                    "Bezeichnung *(optional)*",
+                    options_optional,
+                    index=_idx(options_optional, auto.get("bezeichnung", NONE_OPTION)),
+                    key="map_bezeichnung",
+                )
+            with col4:
+                map_eroeffnung = st.selectbox(
+                    "Eröffnungsdatum *(optional)*",
+                    options_optional,
+                    index=_idx(options_optional, auto.get("eroeffnung", NONE_OPTION)),
+                    key="map_eroeffnung",
+                )
+
+            if map_fil_nr == map_bundesland:
+                st.error("Filialnummer und Bundesland dürfen nicht dieselbe Spalte sein.")
             else:
-                imp = imp.rename(columns={v: k for k, v in col_map.items()})
-                imp["fil_nr"] = imp["fil_nr"].str.strip()
-                imp["bundesland"] = imp["bundesland"].str.strip().str.upper().str.replace("DE-", "")
-                if "eroeffnung" in imp.columns:
-                    imp["eroeffnung"] = imp["eroeffnung"].apply(
+                # Build preview with mapped columns
+                preview = pd.DataFrame()
+                preview["Filialnummer"] = imp[map_fil_nr].str.strip()
+                preview["Bundesland"]   = imp[map_bundesland].str.strip().str.upper().str.replace("DE-", "", regex=False)
+                if map_bezeichnung != NONE_OPTION:
+                    preview["Bezeichnung"] = imp[map_bezeichnung]
+                if map_eroeffnung != NONE_OPTION:
+                    preview["Eröffnung"] = imp[map_eroeffnung].apply(
                         lambda x: _parse_date(str(x)) if pd.notna(x) else None
                     )
 
-                st.markdown(f"**Vorschau ({len(imp)} Zeilen):**")
-                st.dataframe(imp.head(10), use_container_width=True)
+                st.markdown(f"**Vorschau ({len(preview)} Zeilen):**")
+                st.dataframe(preview.head(10), use_container_width=True, hide_index=True)
 
                 if st.button("⬆️ Importieren (bisherige Daten werden überschrieben)", type="primary"):
                     conn.execute("DELETE FROM filialen")
                     imported, skipped = 0, []
 
-                    for idx, row in imp.iterrows():
-                        fil_nr = str(row.get("fil_nr", "")).strip()
-                        bl     = str(row.get("bundesland", "")).strip().upper().replace("DE-", "")
+                    for idx, row in preview.iterrows():
+                        fil_nr = str(row.get("Filialnummer", "")).strip()
+                        bl     = str(row.get("Bundesland", "")).strip().upper().replace("DE-", "")
 
                         if not fil_nr:
                             skipped.append({"Zeile": idx + 2, "Grund": "Filialnummer fehlt",
-                                            "Daten": row.get("bezeichnung", "")})
+                                            "Daten": row.get("Bezeichnung", "")})
                             continue
                         if not bl:
                             skipped.append({"Zeile": idx + 2, "Grund": "Bundesland fehlt",
@@ -220,8 +262,8 @@ with tab3:
                             VALUES (?,?,?,?)
                         """, (
                             fil_nr, bl,
-                            str(row.get("bezeichnung", "")) or None,
-                            row.get("eroeffnung") if pd.notna(row.get("eroeffnung", None)) else None,
+                            str(row.get("Bezeichnung", "")) or None,
+                            row.get("Eröffnung") if pd.notna(row.get("Eröffnung", None)) else None,
                         ))
                         imported += 1
 
