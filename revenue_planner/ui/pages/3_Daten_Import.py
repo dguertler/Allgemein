@@ -34,30 +34,37 @@ if "ist_import_result" in st.session_state:
     elif result["type"] == "error":
         st.error(result["message"])
 
-uploaded = st.file_uploader("Datei hochladen (Excel oder CSV)", type=["xlsx", "xls", "csv"])
+if "ist_upload_key" not in st.session_state:
+    st.session_state["ist_upload_key"] = 0
 
-if uploaded:
-    if st.button("⬆️ Importieren"):
-        try:
-            n, warnings = import_ist_umsatz(conn, uploaded, file_name=uploaded.name)
-            new_fil = ensure_filialen_from_ist(conn, "RP")
-            st.session_state["ist_import_result"] = {
-                "type": "success",
-                "message": f"✅ {n:,} Datensätze importiert.",
-                "warnings": warnings,
-                "new_fil": new_fil,
-            }
-        except ValueError as e:
-            st.session_state["ist_import_result"] = {
-                "type": "error",
-                "message": f"Spaltenfehler: {e}",
-            }
-        except Exception as e:
-            st.session_state["ist_import_result"] = {
-                "type": "error",
-                "message": f"Import fehlgeschlagen: {e}",
-            }
-        st.rerun()
+uploaded = st.file_uploader(
+    "Datei hochladen (Excel oder CSV)",
+    type=["xlsx", "xls", "csv"],
+    key=f"ist_uploader_{st.session_state['ist_upload_key']}",
+)
+
+if st.button("⬆️ Importieren", type="primary", disabled=uploaded is None):
+    try:
+        n, warnings = import_ist_umsatz(conn, uploaded, file_name=uploaded.name)
+        new_fil = ensure_filialen_from_ist(conn, "RP")
+        st.session_state["ist_import_result"] = {
+            "type": "success",
+            "message": f"✅ {n:,} Datensätze importiert.",
+            "warnings": warnings,
+            "new_fil": new_fil,
+        }
+        st.session_state["ist_upload_key"] += 1
+    except ValueError as e:
+        st.session_state["ist_import_result"] = {
+            "type": "error",
+            "message": f"Spaltenfehler: {e}",
+        }
+    except Exception as e:
+        st.session_state["ist_import_result"] = {
+            "type": "error",
+            "message": f"Import fehlgeschlagen: {e}",
+        }
+    st.rerun()
 
 st.divider()
 st.subheader("Aktueller Datenbestand")

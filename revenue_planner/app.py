@@ -1,7 +1,6 @@
 """Streamlit entry point with explicit page navigation."""
 import streamlit as st
 from pathlib import Path
-import base64
 import sys
 
 BASE = Path(__file__).parent
@@ -14,41 +13,38 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Sidebar: company logos ─────────────────────────────────────────────────
 ASSETS = BASE / "ui" / "assets"
 
 
-def _logo_tag(path: Path, width: int = 65) -> str:
-    if not path.exists():
-        return ""
-    b64 = base64.b64encode(path.read_bytes()).decode()
-    ext = path.suffix.lstrip(".")
-    return (
-        f'<img src="data:image/{ext};base64,{b64}" '
-        f'style="width:{width}px;background:#fff;padding:4px 6px;'
-        f'border-radius:5px;object-fit:contain;">'
-    )
+def _combined_logo(paths: list, height: int = 50) -> bytes | None:
+    try:
+        from PIL import Image
+        import io
+        imgs = [Image.open(p).convert("RGBA") for p in paths if p.exists()]
+        if not imgs:
+            return None
+        resized = []
+        for img in imgs:
+            ratio = height / img.height
+            new_w = max(1, int(img.width * ratio))
+            resized.append(img.resize((new_w, height), Image.LANCZOS))
+        gap = 10
+        total_w = sum(i.width for i in resized) + gap * (len(resized) - 1)
+        canvas = Image.new("RGBA", (total_w, height), (255, 255, 255, 255))
+        x = 0
+        for img in resized:
+            canvas.paste(img, (x, 0), img)
+            x += img.width + gap
+        buf = io.BytesIO()
+        canvas.save(buf, "PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
 
 
-with st.sidebar:
-    g = _logo_tag(ASSETS / "goertz_logo.png")
-    p = _logo_tag(ASSETS / "papperts_logo.png")
-
-    if g or p:
-        st.markdown(
-            f'<div style="display:flex;gap:10px;align-items:center;'
-            f'padding:6px 0 4px 0;">{g}{p}</div>',
-            unsafe_allow_html=True,
-        )
-        st.divider()
-    else:
-        st.markdown(
-            "<div style='text-align:center;padding:8px 0 12px 0;"
-            "font-size:13px;color:#666;letter-spacing:.05em;'>"
-            "FILIALUMSATZPLANUNG</div>",
-            unsafe_allow_html=True,
-        )
-        st.divider()
+logo_bytes = _combined_logo([ASSETS / "goertz_logo.png", ASSETS / "papperts_logo.png"])
+if logo_bytes:
+    st.logo(logo_bytes, size="large")
 
 # ── Navigation ─────────────────────────────────────────────────────────────
 pages = st.navigation([
@@ -64,5 +60,7 @@ pages = st.navigation([
             title="Neue Filialen & Lieferkunden", icon=":material/add_business:"),
     st.Page(str(BASE / "ui/pages/6_Planung.py"),
             title="Planung ausführen",             icon=":material/calculate:"),
+    st.Page(str(BASE / "ui/pages/7_Planungsgenauigkeit.py"),
+            title="Planungsgenauigkeit",           icon=":material/analytics:"),
 ])
 pages.run()

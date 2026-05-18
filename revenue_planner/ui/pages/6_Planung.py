@@ -20,10 +20,11 @@ planjahr = st.number_input("Planjahr", min_value=2024, max_value=2035,
                             value=date.today().year + 1, step=1, key="plan_pj")
 
 param_row = conn.execute("SELECT * FROM parameter WHERE planjahr=?", (planjahr,)).fetchone()
+pr = dict(param_row) if param_row else {}
 
 if not param_row:
-    st.warning("Keine Planungsparameter hinterlegt. Bitte zuerst unter **Parameter** konfigurieren.")
-    st.stop()
+    st.info("Keine Planungsparameter hinterlegt — Planung wird mit Standardwerten ausgeführt "
+            "(kein Wachstum, keine Sonder- oder Ferienkorrekturen).")
 
 monat_rows = conn.execute(
     "SELECT monat, wachstum_pct FROM parameter_monat WHERE planjahr=?", (planjahr,)
@@ -35,19 +36,19 @@ def _d(val):
 
 params = PlanParams(
     planjahr=planjahr,
-    preiserhoehung_pct=param_row["preiserhoehung_pct"] or 0.0,
+    preiserhoehung_pct=pr.get("preiserhoehung_pct") or 0.0,
     wachstum_monat=wachstum_monat,
-    ferien_puffer_wochen=param_row["ferien_puffer_wochen"] or 3,
-    ramadan_vj_start=_d(param_row["ramadan_vj_start"]),
-    ramadan_vj_ende=_d(param_row["ramadan_vj_ende"]),
-    ramadan_plan_start=_d(param_row["ramadan_plan_start"]),
-    ramadan_plan_ende=_d(param_row["ramadan_plan_ende"]),
-    ramadan_umsatz_pct=param_row["ramadan_umsatz_pct"] or 0.0,
-    fasching_vj_start=_d(param_row["fasching_vj_start"]),
-    fasching_vj_ende=_d(param_row["fasching_vj_ende"]),
-    fasching_plan_start=_d(param_row["fasching_plan_start"]),
-    fasching_plan_ende=_d(param_row["fasching_plan_ende"]),
-    fasching_wirkung_pct=param_row["fasching_wirkung_pct"] or 0.0,
+    ferien_puffer_wochen=pr.get("ferien_puffer_wochen") or 3,
+    ramadan_vj_start=_d(pr.get("ramadan_vj_start")),
+    ramadan_vj_ende=_d(pr.get("ramadan_vj_ende")),
+    ramadan_plan_start=_d(pr.get("ramadan_plan_start")),
+    ramadan_plan_ende=_d(pr.get("ramadan_plan_ende")),
+    ramadan_umsatz_pct=pr.get("ramadan_umsatz_pct") or 0.0,
+    fasching_vj_start=_d(pr.get("fasching_vj_start")),
+    fasching_vj_ende=_d(pr.get("fasching_vj_ende")),
+    fasching_plan_start=_d(pr.get("fasching_plan_start")),
+    fasching_plan_ende=_d(pr.get("fasching_plan_ende")),
+    fasching_wirkung_pct=pr.get("fasching_wirkung_pct") or 0.0,
 )
 
 with st.expander("📋 Aktive Parameter", expanded=False):
