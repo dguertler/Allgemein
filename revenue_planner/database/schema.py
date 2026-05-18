@@ -141,7 +141,7 @@ def get_db_path(gmbh_name: str, data_dir: str = "data") -> Path:
 def init_db(db_path: str | Path) -> sqlite3.Connection:
     """Create (or open) the database and ensure the schema exists."""
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
