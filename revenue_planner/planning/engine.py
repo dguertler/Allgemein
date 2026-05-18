@@ -309,8 +309,12 @@ class PlanningEngine:
         if (fil_nr, month) in self.overrides:
             return self.overrides[(fil_nr, month)]
 
-        # 2. New branch → use neue_filialen_plan
-        if fil.get("flag_neue_filiale"):
+        # 2. New branch → detected by eroeffnung in plan year
+        eroeff_str = fil.get("eroeffnung")
+        is_neue_filiale = bool(
+            eroeff_str and date.fromisoformat(eroeff_str).year == self.p.planjahr
+        )
+        if is_neue_filiale:
             entry = self.neue_plan.get((fil_nr, month))
             if entry:
                 planwert = entry["planwert"]
@@ -346,8 +350,8 @@ class PlanningEngine:
     # ── Daily planning ────────────────────────────────────────────────────
 
     def plan_branch(self, fil_nr: str) -> list[DayPlan]:
-        fil = self.filialen.get(fil_nr, {"bundesland": "DE-RP"})
-        bl = fil.get("bundesland", "DE-RP")
+        fil = self.filialen.get(fil_nr, {"bundesland": "RP"})
+        bl = fil.get("bundesland", "RP")
         growth = 1.0 if fil.get("flag_kein_wachstum") else (1 + self.p.preiserhoehung_pct / 100)
 
         results: list[DayPlan] = []
