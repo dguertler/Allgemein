@@ -106,13 +106,13 @@ class PlanningEngine:
         p = self.p
         c = self.conn.cursor()
 
-        # Feiertage plan year: {datum_plan → (name, datum_vj, bundesland)}
+        # Feiertage plan year: {datum_plan → list of {name, datum_vj, bundesland}}
+        # List because the same date can be a holiday in multiple states with different names.
         rows = c.execute("SELECT datum_plan, datum_vj, name, bundesland FROM feiertage").fetchall()
-        self.feiertage: dict[str, dict] = {}
+        self.feiertage: dict[str, list[dict]] = {}
         for r in rows:
-            self.feiertage[r["datum_plan"]] = {
-                "name": r["name"], "datum_vj": r["datum_vj"], "bundesland": r["bundesland"]
-            }
+            entry = {"name": r["name"], "datum_vj": r["datum_vj"], "bundesland": r["bundesland"]}
+            self.feiertage.setdefault(r["datum_plan"], []).append(entry)
 
         # Sondertage plan year
         rows = c.execute("SELECT datum_plan, datum_referenz, bezeichnung, methode, bundesland FROM sondertage").fetchall()
@@ -281,12 +281,9 @@ class PlanningEngine:
         return float(sat[sat > 0].mean()) if not sat.empty else 0.0
 
     def _is_relevant_feiertag(self, iso_date: str, bundesland: str) -> dict | None:
-        ft = self.feiertage.get(iso_date)
-        if ft is None:
-            return None
-        ft_bl = ft["bundesland"]
-        if ft_bl == "alle" or ft_bl == bundesland:
-            return ft
+        for ft in self.feiertage.get(iso_date, []):
+            if ft["bundesland"] == "alle" or ft["bundesland"] == bundesland:
+                return ft
         return None
 
     def _is_relevant_sondertag(self, iso_date: str, bundesland: str) -> dict | None:

@@ -14,6 +14,9 @@ gmbh = get_gmbh()
 st.title("Planungsgenauigkeit")
 st.caption(f"Firma: **{gmbh}**")
 
+MONATE = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
+          "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
+
 # ── Check if any plan data exists ──────────────────────────────────────────
 jahre = [r[0] for r in conn.execute(
     "SELECT DISTINCT CAST(strftime('%Y', datum) AS INTEGER) FROM planung ORDER BY 1 DESC"
@@ -99,14 +102,15 @@ if ansicht == "Gesamt aggregiert":
                 "Budget €":  "sum",
                 "IST €":     lambda x: x.sum() if x.notna().any() else None,
             }))
+    df["Filiale"] = ""
 
-# Abweichung IST vs Budget (only where current IST exists)
+# Abweichung: IST vs Budget (only where current IST exists)
 df["Abw. €"] = df.apply(
     lambda x: round(x["IST €"] - x["Budget €"], 2) if pd.notna(x["IST €"]) else None,
     axis=1,
 )
 df["Abw. %"] = df.apply(
-    lambda x: round((x["Abw. €"] / x["Budget €"] * 100), 1)
+    lambda x: round(x["Abw. €"] / x["Budget €"] * 100, 1)
     if pd.notna(x.get("Abw. €")) and x["Budget €"] != 0 else None,
     axis=1,
 )
@@ -130,41 +134,121 @@ else:
 
 st.divider()
 
-# ── Table ──────────────────────────────────────────────────────────────────
-euro_fmt = st.column_config.NumberColumn(format="%.0f €")
-pct_fmt  = st.column_config.NumberColumn(format="%.1f %%")
-
+# ── Build display columns ──────────────────────────────────────────────────
 if ansicht == "Gesamt aggregiert":
-    display_cols = ["Datum", "Wochentag", "Tagestyp", "Info",
-                    "IST VJ €", "Budget €", "IST €", "Abw. €", "Abw. %"]
+    base_cols = ["Datum", "Wochentag", "Tagestyp", "Info",
+                 "IST VJ €", "Budget €", "IST €", "Abw. €", "Abw. %"]
 else:
-    display_cols = ["Filiale", "Datum", "Wochentag", "Tagestyp", "Info",
-                    "IST VJ €", "Budget €", "IST €", "Abw. €", "Abw. %"]
+    base_cols = ["Filiale", "Datum", "Wochentag", "Tagestyp", "Info",
+                 "IST VJ €", "Budget €", "IST €", "Abw. €", "Abw. %"]
 
-st.dataframe(
-    df[display_cols],
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "IST VJ €": euro_fmt,
-        "Budget €": euro_fmt,
-        "IST €":    euro_fmt,
-        "Abw. €":   euro_fmt,
-        "Abw. %":   pct_fmt,
-    },
-    height=500,
+
+# ── Insert monthly subtotals + grand total ─────────────────────────────────
+def _build_with_subtotals(df_in: pd.DataFrame) -> tuple[pd.DataFrame, list[bool]]:
+    df_in = df_in.copy()
+    df_in["_m"] = pd.to_datetime(df_in["Datum"]).dt.month
+    rows_out, is_sub = [], []
+
+    for m in sorted(df_in["_m"].dropna().unique()):
+        df_m = df_in[df_in["_m"] == m]
+
+        for _, row in df_m.iterrows():
+            rows_out.append(dict(row))
+            is_sub.append(False)
+
+        ist_s   = df_m["IST €"].sum() if df_m["IST €"].notna().any() else None
+        bud_s   = df_m["Budget €"].sum()
+        abw_s   = round(ist_s - bud_s, 2) if ist_s is not None else None
+        abwp_s  = round(abw_s / bud_s * 100, 1) if abw_s is not None and bud_s != 0 else None
+
+        sub = {col: "" for col in base_cols}
+        sub["Datum"]    = f"Σ {MONATE[int(m)-1]} {planjahr}"
+        sub["IST VJ €"] = df_m["IST VJ €"].sum()
+        sub["Budget €"] = bud_s
+        sub["IST €"]    = ist_s
+        sub["Abw. €"]   = abw_s
+        sub["Abw. %"]   = abwp_s
+        sub["_m"]       = m
+        rows_out.append(sub)
+        is_sub.append(True)
+
+    # Grand total
+    ist_t  = df_in["IST €"].sum() if df_in["IST €"].notna().any() else None
+    bud_t  = df_in["Budget €"].sum()
+    abw_t  = round(ist_t - bud_t, 2) if ist_t is not None else None
+    abwp_t = round(abw_t / bud_t * 100, 1) if abw_t is not None and bud_t != 0 else None
+
+    total = {col: "" for col in base_cols}
+    total["Datum"]    = "Σ GESAMT"
+    total["IST VJ €"] = df_in["IST VJ €"].sum()
+    total["Budget €"] = bud_t
+    total["IST €"]    = ist_t
+    total["Abw. €"]   = abw_t
+    total["Abw. %"]   = abwp_t
+    total["_m"]       = 0
+    rows_out.append(total)
+    is_sub.append(True)
+
+    return pd.DataFrame(rows_out).reset_index(drop=True), is_sub
+
+
+df_disp, is_sub = _build_with_subtotals(df)
+is_sub_arr = is_sub  # plain list, aligned with reset index
+
+
+def _highlight(row):
+    return (["background-color: #dce8f5; font-weight: 600"] * len(row)
+            if is_sub_arr[row.name] else [""] * len(row))
+
+
+def _fmt(val):
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return ""
+    if isinstance(val, float):
+        return f"{val:,.0f}"
+    return str(val)
+
+
+euro_cols = ["IST VJ €", "Budget €", "IST €", "Abw. €"]
+pct_cols  = ["Abw. %"]
+
+styled = (
+    df_disp[base_cols]
+    .style
+    .apply(_highlight, axis=1)
+    .format({c: _fmt for c in euro_cols + pct_cols}, na_rep="")
 )
+
+st.dataframe(styled, use_container_width=True, hide_index=True, height=560)
 
 # ── Excel export ───────────────────────────────────────────────────────────
 st.divider()
 with st.spinner("Excel wird erstellt…"):
     buf = io.BytesIO()
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    export_df = df_disp[base_cols].copy()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df[display_cols].to_excel(writer, index=False, sheet_name="Planungsgenauigkeit")
+        export_df.to_excel(writer, index=False, sheet_name="Planungsgenauigkeit")
         ws = writer.sheets["Planungsgenauigkeit"]
-        from openpyxl.styles import Font
+
+        header_font = Font(bold=True)
+        sub_fill    = PatternFill("solid", fgColor="DCE8F5")
+        sub_font    = Font(bold=True)
+
         for cell in ws[1]:
-            cell.font = Font(bold=True)
+            cell.font = header_font
+
+        for row_idx, flag in enumerate(is_sub, start=2):
+            if flag:
+                for cell in ws[row_idx]:
+                    cell.fill = sub_fill
+                    cell.font = sub_font
+
+        for col_idx in range(1, len(base_cols) + 1):
+            ws.column_dimensions[get_column_letter(col_idx)].width = 14
+
     excel_bytes = buf.getvalue()
 
 suffix = f"_{selected_fil}" if selected_fil else f"_{ansicht.replace(' ', '_')}"
