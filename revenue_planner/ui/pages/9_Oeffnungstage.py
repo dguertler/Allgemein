@@ -16,15 +16,28 @@ st.caption(f"Firma: **{get_gmbh()}**")
 st.markdown("""
 Aus den importierten Umsätzen wird automatisch erkannt, an welchen **Wochentagen**
 und **Feiertagen** jede Filiale im Basiszeitraum geöffnet hatte. Diese Werte gelten
-fürs Budgetjahr und können hier angepasst werden (z.B. „ab 2026 sonntags geschlossen").
+fuers Budgetjahr und koennen hier angepasst werden (z.B. "ab 2026 sonntags geschlossen").
+
+Die **automatische Erkennung** laeuft direkt nach dem Umsatz-Import.
+Der Button unten ist nuetzlich, wenn Filialen nachtraeglich angelegt wurden oder
+Stammdaten geaendert wurden.
 """)
+
+st.markdown("""
+<style>
+[data-testid="stDataFrameResizable"] [role="gridcell"] input[type="checkbox"]:checked {
+    accent-color: #1976d2;
+}
+</style>
+""", unsafe_allow_html=True)
 
 WT = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
-if st.button("🔄 Aus IST-Daten neu erkennen (überschreibt manuelle Änderungen)"):
+if st.button("🔄 Erneut erkennen (ueberschreibt manuelle Aenderungen)",
+             help="Nuetzlich nach dem Import neuer IST-Daten oder nach Aenderungen an den Filialen."):
     det = detect_oeffnungstage(conn, force=True)
-    st.success(f"✅ Öffnungstage für {det['weekday_branches']} Filiale(n) und "
-               f"{det['holiday_entries']} Feiertags-Einträge neu erkannt.")
+    st.success(f"Oeffnungstage fuer {det['weekday_branches']} Filiale(n) und "
+               f"{det['holiday_entries']} Feiertags-Eintraege neu erkannt.")
     st.rerun()
 
 filialen = conn.execute("SELECT fil_nr, bezeichnung FROM filialen ORDER BY fil_nr").fetchall()
@@ -44,7 +57,7 @@ with tab1:
     for f in filialen:
         row = {"Filiale": f["fil_nr"], "Bezeichnung": f["bezeichnung"] or ""}
         for wt in range(7):
-            row[WT[wt]] = oeff.get((f["fil_nr"], wt), True)
+            row[WT[wt]] = bool(oeff.get((f["fil_nr"], wt), False))
         data.append(row)
     df = pd.DataFrame(data)
 
