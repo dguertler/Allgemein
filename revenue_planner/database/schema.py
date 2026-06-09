@@ -121,21 +121,65 @@ CREATE TABLE IF NOT EXISTS parameter_monat (
     PRIMARY KEY (planjahr, monat)
 );
 
+-- ── Opening weekdays per branch (auto-detected from import, editable) ───────
+-- offen=1 → Filiale hat an diesem Wochentag im Basiszeitraum geöffnet
+CREATE TABLE IF NOT EXISTS filial_oeffnung (
+    fil_nr      TEXT NOT NULL,
+    wochentag   INTEGER NOT NULL,   -- 0=Mo … 6=So
+    offen       INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (fil_nr, wochentag)
+);
+
+-- ── Opening on public holidays per branch (auto-detected, editable) ─────────
+CREATE TABLE IF NOT EXISTS filial_feiertag (
+    fil_nr        TEXT NOT NULL,
+    feiertag_name TEXT NOT NULL,
+    offen         INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (fil_nr, feiertag_name)
+);
+
+-- ── Per-week vacation factors (computed, inspectable) ───────────────────────
+-- woche: 1..n innerhalb der Ferien; faktor = Ø Umsatz Ferienwoche / Ø Puffer (2 Wo davor)
+CREATE TABLE IF NOT EXISTS ferien_faktor (
+    fil_nr      TEXT NOT NULL,
+    bundesland  TEXT NOT NULL,
+    ferien_art  TEXT NOT NULL,
+    woche       INTEGER NOT NULL,
+    faktor      REAL NOT NULL DEFAULT 1.0,
+    PRIMARY KEY (fil_nr, bundesland, ferien_art, woche)
+);
+
 -- ── Computed plan (written after each planning run) ───────────────────────
+-- Additive Effekt-Zerlegung: ist_vj + Summe(eff_*) = budget (exakt je Tag)
 CREATE TABLE IF NOT EXISTS planung (
     fil_nr          TEXT NOT NULL,
     datum           TEXT NOT NULL,          -- ISO date im Planjahr
     wochentag       INTEGER NOT NULL,       -- 0=Mo … 6=So
-    ist_vj          REAL,                   -- Vorjahres-Ist
-    monatsumsatz_ist_hoch REAL,             -- hochgerechneter Ist-Monatsumsatz
-    monatsumsatz_plan REAL,                 -- Monatsplan nach Erhöhung
-    tagesumsatz_plan  REAL,                 -- tagesgenaue Planung
-    liefer_plan     REAL,                   -- Lieferkunden-Anteil
-    gesamt_plan     REAL,                   -- tagesumsatz_plan + liefer_plan
+    bundesland      TEXT,
+    ist_vj          REAL,                   -- Ist des korrespondierenden Basistags
+    -- additive Effekte (Herleitung)
+    eff_oeffnung    REAL,                   -- Öffnungs-/Schließungseffekt
+    eff_verteilung  REAL,                   -- Glättung Einzeltag → Wochentagsverteilung
+    eff_wochentag   REAL,                   -- Wochentagsmix-Verschiebung (Hochrechnung)
+    eff_preis       REAL,                   -- Preisanpassung / Wachstum
+    eff_ferien      REAL,                   -- Ferieneffekt
+    eff_feiertag    REAL,                   -- Feiertags-/Sondertagseffekt
+    eff_norm        REAL,                   -- Normalisierungs-Rebalancing
+    budget          REAL,                   -- Endwert = ist_vj + Summe(eff_*)
+    -- Monatskontext (gleich für alle Tage des Monats)
+    monat_basis     REAL,                   -- Basismonatsumsatz (IST Basiszeitraum)
+    monat_hoch      REAL,                   -- hochgerechnet auf Planjahr-Wochentage
+    monat_plan      REAL,                   -- nach Wachstum
+    -- Kompatibilitäts-Spalten (Spiegel von budget / monat_*)
+    monatsumsatz_ist_hoch REAL,
+    monatsumsatz_plan REAL,
+    tagesumsatz_plan  REAL,
+    liefer_plan     REAL,                   -- nicht mehr genutzt (immer 0)
+    gesamt_plan     REAL,                   -- = budget
     tagestyp        TEXT,                   -- 'normal'|'feiertag'|'sondertag'|'ferien'|'geschlossen'
     feiertag_name   TEXT,
     ferien_art      TEXT,
-    normalisierung  REAL,                   -- angewendeter Normalisierungsfaktor
+    normalisierung  REAL,
     PRIMARY KEY (fil_nr, datum)
 );
 CREATE INDEX IF NOT EXISTS idx_planung_datum ON planung(datum);
@@ -181,3 +225,40 @@ def _migrate(conn: sqlite3.Connection):
             PRIMARY KEY (planjahr, monat)
         )
     """)
+
+    # New input/output tables (idempotent)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS filial_oeffnung (
+            fil_nr      TEXT NOT NULL,
+            wochentag   INTEGER NOT NULL,
+            offen       INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (fil_nr, wochentag)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS filial_feiertag (
+            fil_nr        TEXT NOT NULL,
+            feiertag_name TEXT NOT NULL,
+            offen         INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (fil_nr, feiertag_name)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ferien_faktor (
+            fil_nr      TEXT NOT NULL,
+            bundesland  TEXT NOT NULL,
+            ferien_art  TEXT NOT NULL,
+            woche       INTEGER NOT NULL,
+            faktor      REAL NOT NULL DEFAULT 1.0,
+            PRIMARY KEY (fil_nr, bundesland, ferien_art, woche)
+        )
+    """)
+
+    # Extend planung with additive effect columns
+    plan_cols = {row[1] for row in conn.execute("PRAGMA table_info(planung)").fetchall()}
+    for col in ["bundesland", "eff_oeffnung", "eff_verteilung", "eff_wochentag",
+                "eff_preis", "eff_ferien", "eff_feiertag", "eff_norm", "budget",
+                "monat_basis", "monat_hoch", "monat_plan"]:
+        if col not in plan_cols:
+            typ = "TEXT" if col == "bundesland" else "REAL"
+            conn.execute(f"ALTER TABLE planung ADD COLUMN {col} {typ}")

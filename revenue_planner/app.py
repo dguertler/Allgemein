@@ -94,23 +94,27 @@ pages = st.navigation({
         st.Page(str(BASE / "ui/pages/1_Startseite.py"),
                 title="Startseite", icon=":material/home:"),
     ],
-    "Stammdaten & Import": [
+    "Input & Stammdaten": [
         st.Page(str(BASE / "ui/pages/2_Filialen.py"),
                 title="Filialen",        icon=":material/store:"),
         st.Page(str(BASE / "ui/pages/3_Daten_Import.py"),
-                title="Daten Import",    icon=":material/upload_file:"),
+                title="Umsatz-Import",    icon=":material/upload_file:"),
+        st.Page(str(BASE / "ui/pages/9_Oeffnungstage.py"),
+                title="Öffnungstage",    icon=":material/calendar_month:"),
         st.Page(str(BASE / "ui/pages/8_Feiertage_Import.py"),
                 title="Feiertage laden", icon=":material/event:"),
     ],
-    "Konfiguration": [
+    "Annahmen": [
         st.Page(str(BASE / "ui/pages/4_Parameter.py"),
-                title="Parameter",                    icon=":material/tune:"),
+                title="Parameter",        icon=":material/tune:"),
         st.Page(str(BASE / "ui/pages/5_Neue_Filialen.py"),
-                title="Neue Filialen & Lieferkunden", icon=":material/add_business:"),
+                title="Neue Filialen",    icon=":material/add_business:"),
     ],
-    "Planung": [
+    "Berechnung & Validierung": [
         st.Page(str(BASE / "ui/pages/6_Planung.py"),
-                title="Planung ausführen",  icon=":material/calculate:"),
+                title="Planung ausführen",   icon=":material/calculate:"),
+        st.Page(str(BASE / "ui/pages/10_Herleitung.py"),
+                title="Herleitung",          icon=":material/account_tree:"),
         st.Page(str(BASE / "ui/pages/7_Planungsgenauigkeit.py"),
                 title="Planungsgenauigkeit", icon=":material/analytics:"),
     ],

@@ -51,11 +51,10 @@ def build_excel(results: list[DayPlan], gmbh_name: str, planjahr: int) -> bytes:
             "feiertag": r.feiertag_name,
             "ferien": r.ferien_art,
             "ist_vj": r.ist_vj,
-            "monatsumsatz_ist_hoch": r.monatsumsatz_ist_hoch,
-            "monatsumsatz_plan": r.monatsumsatz_plan,
-            "tagesumsatz_plan": r.tagesumsatz_plan,
-            "liefer_plan": r.liefer_plan,
-            "gesamt_plan": r.gesamt_plan,
+            "monatsumsatz_ist_hoch": r.monat_hoch,
+            "monatsumsatz_plan": r.monat_plan,
+            "tagesumsatz_plan": r.budget,
+            "gesamt_plan": r.budget,
             "normalisierung": r.normalisierung,
         }
         for r in results
@@ -86,7 +85,7 @@ def _sheet_jahresuebersicht(wb: Workbook, df: pd.DataFrame, planjahr: int, gmbh:
     ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 28
 
-    headers = ["Filiale", "IST VJ (€)", "Plan (€)", "Lieferkunden (€)", "Gesamt Plan (€)"]
+    headers = ["Filiale", "IST VJ (€)", "Budget (€)", "Δ (€)"]
     for col, h in enumerate(headers, 1):
         c = ws.cell(row=2, column=col, value=h)
         c.font = _hfont(bold=True, color="FFFFFF")
@@ -96,14 +95,13 @@ def _sheet_jahresuebersicht(wb: Workbook, df: pd.DataFrame, planjahr: int, gmbh:
 
     summary = df.groupby("fil_nr").agg(
         ist_vj=("ist_vj", "sum"),
-        tagesumsatz_plan=("tagesumsatz_plan", "sum"),
-        liefer_plan=("liefer_plan", "sum"),
         gesamt_plan=("gesamt_plan", "sum"),
     ).reset_index().sort_values("fil_nr")
+    summary["delta"] = summary["gesamt_plan"] - summary["ist_vj"]
 
     for row_i, row in enumerate(summary.itertuples(), 3):
         fill = _hfill(COL_ALT) if row_i % 2 == 0 else _hfill(COL_WHITE)
-        vals = [row.fil_nr, row.ist_vj, row.tagesumsatz_plan, row.liefer_plan, row.gesamt_plan]
+        vals = [row.fil_nr, row.ist_vj, row.gesamt_plan, row.delta]
         for col, v in enumerate(vals, 1):
             c = ws.cell(row=row_i, column=col, value=v)
             c.fill = fill
@@ -114,7 +112,7 @@ def _sheet_jahresuebersicht(wb: Workbook, df: pd.DataFrame, planjahr: int, gmbh:
     # Totals
     total_row = row_i + 1
     ws.cell(row=total_row, column=1, value="GESAMT").font = _hfont(bold=True)
-    for col, col_name in enumerate(["ist_vj", "tagesumsatz_plan", "liefer_plan", "gesamt_plan"], 2):
+    for col, col_name in enumerate(["ist_vj", "gesamt_plan", "delta"], 2):
         c = ws.cell(row=total_row, column=col, value=summary[col_name].sum())
         c.font = _hfont(bold=True)
         c.number_format = EUR
@@ -188,8 +186,7 @@ def _sheet_tagesdetail(wb: Workbook, df: pd.DataFrame, planjahr: int):
     ws.row_dimensions[1].height = 22
 
     headers = ["Filiale", "Datum", "Wochentag", "Typ", "Feiertag/Sondertag",
-               "Ferien", "IST VJ (€)", "Plan (€)", "Lieferk. (€)",
-               "Gesamt (€)", "Norm.-Faktor"]
+               "Ferien", "IST VJ (€)", "Budget (€)", "Norm.-Faktor"]
     for col, h in enumerate(headers, 1):
         c = ws.cell(row=2, column=col, value=h)
         c.font = _hfont(bold=True, color="FFFFFF")
@@ -211,8 +208,6 @@ def _sheet_tagesdetail(wb: Workbook, df: pd.DataFrame, planjahr: int):
             row.feiertag,
             row.ferien,
             row.ist_vj,
-            row.tagesumsatz_plan,
-            row.liefer_plan,
             row.gesamt_plan,
             row.normalisierung,
         ]
@@ -222,10 +217,10 @@ def _sheet_tagesdetail(wb: Workbook, df: pd.DataFrame, planjahr: int):
             c.border = border
             if col == 2 and isinstance(v, date):
                 c.number_format = "DD.MM.YYYY"
-            elif col in (7, 8, 9, 10):
+            elif col in (7, 8):
                 c.number_format = EUR
 
-    ws.auto_filter.ref = f"A2:K{ws.max_row}"
+    ws.auto_filter.ref = f"A2:I{ws.max_row}"
     ws.freeze_panes = "A3"
     _auto_col_width(ws)
 

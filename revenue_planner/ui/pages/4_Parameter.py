@@ -30,17 +30,15 @@ with tabs[0]:
 
     with st.form("params_puffer"):
         puffer = st.number_input(
-            "Ferien-Pufferzeitraum (Wochen vor/nach Ferien)",
+            "Ferien-Pufferzeitraum (Wochen vor Ferien als Referenz)",
             min_value=1, max_value=8,
-            value=int(ex.get("ferien_puffer_wochen", 3)), step=1,
+            value=int(ex.get("ferien_puffer_wochen", 2)), step=1,
             help=(
-                "Gibt an, wie viele Wochen VOR und NACH jeder Ferienzeit als Vergleichszeitraum "
-                "dienen, um den Ferienfaktor zu berechnen.\n\n"
-                "Beispiel: Sommerferien 1.–31. Juli, Puffer = 3 Wochen → Vergleich: "
-                "10.–30. Juni & 1.–21. August. Ferienfaktor = Ø Tagesumsatz Ferien ÷ "
-                "Ø Tagesumsatz Pufferzeitraum. Liegt der Faktor bei 0,85, werden in den "
-                "Ferienwochen 15 % weniger Umsatz geplant als in Normalwochen. "
-                "Empfehlung: 3 Wochen."
+                "Anzahl Wochen VOR Ferienbeginn, die als Referenz für den Ferienfaktor dienen. "
+                "Der Ferienfaktor wird pro Ferienwoche berechnet: Ø Umsatz der jeweiligen "
+                "Ferienwoche ÷ Ø Umsatz im Pufferzeitraum (wochentags-gematcht). "
+                "Beispiel-Ergebnis: Ferienwoche 1 −10 %, Woche 2 −5 %, Woche 3 −2 %. "
+                "Empfehlung: 2 Wochen."
             )
         )
         if st.form_submit_button("💾 Speichern"):

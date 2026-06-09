@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from ui.session import get_conn, get_gmbh, require_db
-from database.importer import import_ist_umsatz, _detect_columns
+from database.importer import import_ist_umsatz, _detect_columns, detect_oeffnungstage
 import pandas as pd
 
 require_db()
@@ -64,9 +64,14 @@ if st.button("⬆️ Importieren", type="primary", disabled=uploaded is None):
                 )
 
         n, warnings = import_ist_umsatz(conn, uploaded, file_name=uploaded.name)
+        det = detect_oeffnungstage(conn, force=False)
+        msg = f"✅ {n:,} Datensätze importiert."
+        if det["weekday_branches"]:
+            msg += (f" Öffnungstage für {det['weekday_branches']} Filiale(n) automatisch erkannt "
+                    f"(unter **Öffnungstage** prüfbar/änderbar).")
         st.session_state["ist_import_result"] = {
             "type": "success",
-            "message": f"✅ {n:,} Datensätze importiert.",
+            "message": msg,
             "warnings": warnings,
         }
         st.session_state["ist_upload_key"] += 1

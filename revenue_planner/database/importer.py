@@ -109,6 +109,76 @@ def _detect_columns(columns: list[str]) -> dict[str, str | None]:
     }
 
 
+def detect_oeffnungstage(conn: sqlite3.Connection, force: bool = False) -> dict:
+    """
+    Erkenne aus den IST-Daten je Filiale:
+      - an welchen Wochentagen geöffnet (Umsatz > 0 in >=30% der Vorkommen)
+      - an welchen Feiertagen historisch geöffnet (Umsatz > 0 am Feiertags-Vorjahrestag)
+
+    force=False  → nur Filialen ohne bestehende Einträge befüllen (manuelle Edits bleiben).
+    force=True   → alles neu erkennen (überschreibt).
+
+    Returns dict mit Zählern.
+    """
+    df = pd.read_sql("SELECT fil_nr, datum, umsatz FROM ist_umsatz", conn)
+    if df.empty:
+        return {"weekday_branches": 0, "holiday_entries": 0}
+    df["datum"] = pd.to_datetime(df["datum"])
+    df["wt"] = df["datum"].dt.weekday
+
+    cur = conn.cursor()
+    existing_wd = {r[0] for r in cur.execute("SELECT DISTINCT fil_nr FROM filial_oeffnung").fetchall()}
+
+    wd_branches = 0
+    for fil_nr, g in df.groupby("fil_nr"):
+        if not force and fil_nr in existing_wd:
+            continue
+        for wt in range(7):
+            sub = g[g["wt"] == wt]
+            total = len(sub)
+            with_rev = int((sub["umsatz"] > 0).sum())
+            offen = 1 if (total > 0 and with_rev / total >= 0.30) else 0
+            cur.execute(
+                "INSERT OR REPLACE INTO filial_oeffnung (fil_nr, wochentag, offen) VALUES (?,?,?)",
+                (fil_nr, wt, offen),
+            )
+        wd_branches += 1
+
+    # Feiertags-Öffnung: je Filiale × Feiertag prüfen, ob am datum_vj Umsatz vorlag
+    feiertage = cur.execute(
+        "SELECT DISTINCT name, datum_vj FROM feiertage WHERE datum_vj IS NOT NULL"
+    ).fetchall()
+    existing_ft = {(r[0], r[1]) for r in cur.execute(
+        "SELECT fil_nr, feiertag_name FROM filial_feiertag").fetchall()}
+
+    rev_lookup = {(r.fil_nr, r.datum.strftime("%Y-%m-%d")): r.umsatz
+                  for r in df.itertuples()}
+    # Zusätzlich: max. Umsatz je (Filiale, Monat-Tag) über alle Jahre (für feste Feiertage)
+    df_md = df.assign(md=df["datum"].dt.strftime("%m-%d"))
+    md_series = df_md.groupby(["fil_nr", "md"])["umsatz"].max()
+    md_lookup: dict[tuple, float] = {idx: float(v) for idx, v in md_series.items()}
+
+    ft_entries = 0
+    all_fils = [r[0] for r in cur.execute("SELECT fil_nr FROM filialen").fetchall()]
+    for fil_nr in all_fils:
+        for ft in feiertage:
+            name, datum_vj = ft["name"], ft["datum_vj"]
+            if not force and (fil_nr, name) in existing_ft:
+                continue
+            umsatz = rev_lookup.get((fil_nr, datum_vj), 0.0)
+            if not (umsatz and umsatz > 0) and datum_vj:
+                umsatz = md_lookup.get((fil_nr, datum_vj[5:]), 0.0)  # 'YYYY-MM-DD' → 'MM-DD'
+            offen = 1 if (umsatz and umsatz > 0) else 0
+            cur.execute(
+                "INSERT OR REPLACE INTO filial_feiertag (fil_nr, feiertag_name, offen) VALUES (?,?,?)",
+                (fil_nr, name, offen),
+            )
+            ft_entries += 1
+
+    conn.commit()
+    return {"weekday_branches": wd_branches, "holiday_entries": ft_entries}
+
+
 def ensure_filialen_from_ist(conn: sqlite3.Connection, bundesland_default: str = "DE-RP") -> int:
     """Auto-create filiale entries for any fil_nr present in ist_umsatz but missing in filialen."""
     cur = conn.cursor()
