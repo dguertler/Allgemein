@@ -16,12 +16,25 @@ st.caption(f"Firma: **{get_gmbh()}**")
 st.markdown("""
 Aus den importierten Umsätzen wird automatisch erkannt, an welchen **Wochentagen**
 und **Feiertagen** jede Filiale im Basiszeitraum geöffnet hatte. Diese Werte gelten
-fürs Budgetjahr und können hier angepasst werden (z.B. „ab 2026 sonntags geschlossen").
+fürs Budgetjahr und können hier angepasst werden.
+
+Die **automatische Erkennung** läuft direkt nach dem Umsatz-Import.
+Der Button unten ist nützlich, wenn Filialen nachträglich angelegt wurden oder
+Stammdaten geändert wurden.
 """)
+
+st.markdown("""
+<style>
+[data-testid="stDataFrameResizable"] [role="gridcell"] input[type="checkbox"]:checked {
+    accent-color: #1976d2;
+}
+</style>
+""", unsafe_allow_html=True)
 
 WT = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
-if st.button("🔄 Aus IST-Daten neu erkennen (überschreibt manuelle Änderungen)"):
+if st.button("\U0001f504 Erneut erkennen (überschreibt manuelle Änderungen)",
+             help="Nützlich nach dem Import neuer IST-Daten oder nach Änderungen an den Filialen."):
     det = detect_oeffnungstage(conn, force=True)
     st.success(f"✅ Öffnungstage für {det['weekday_branches']} Filiale(n) und "
                f"{det['holiday_entries']} Feiertags-Einträge neu erkannt.")
@@ -34,7 +47,7 @@ if not filialen:
 
 tab1, tab2 = st.tabs(["Wochentage", "Feiertags-Öffnung"])
 
-# ── Tab 1: Weekday opening (all branches, matrix) ──────────────────────────
+# ── Tab 1: Weekday opening (all branches, matrix) ────────────────────────────
 with tab1:
     st.subheader("Wochentags-Programm je Filiale")
     oeff = {(r["fil_nr"], r["wochentag"]): bool(r["offen"])
@@ -44,7 +57,7 @@ with tab1:
     for f in filialen:
         row = {"Filiale": f["fil_nr"], "Bezeichnung": f["bezeichnung"] or ""}
         for wt in range(7):
-            row[WT[wt]] = oeff.get((f["fil_nr"], wt), True)
+            row[WT[wt]] = bool(oeff.get((f["fil_nr"], wt), False))
         data.append(row)
     df = pd.DataFrame(data)
 
@@ -59,7 +72,7 @@ with tab1:
         key="oeff_editor",
     )
 
-    if st.button("💾 Wochentage speichern", type="primary"):
+    if st.button("\U0001f4be Wochentage speichern", type="primary"):
         for _, row in edited.iterrows():
             for wt in range(7):
                 conn.execute(
@@ -70,7 +83,7 @@ with tab1:
         st.success("✅ Gespeichert.")
         st.rerun()
 
-# ── Tab 2: Holiday opening (per branch) ────────────────────────────────────
+# ── Tab 2: Holiday opening (per branch) ───────────────────────────────────
 with tab2:
     st.subheader("Feiertags-Öffnung")
     st.caption("Hatte die Filiale am jeweiligen Feiertag historisch Umsatz, wird sie als offen "
@@ -100,7 +113,7 @@ with tab2:
             height=400,
         )
 
-        if st.button("💾 Feiertags-Öffnung speichern", type="primary"):
+        if st.button("\U0001f4be Feiertags-Öffnung speichern", type="primary"):
             for _, row in edited_ft.iterrows():
                 conn.execute(
                     "INSERT OR REPLACE INTO filial_feiertag (fil_nr, feiertag_name, offen) VALUES (?,?,?)",
