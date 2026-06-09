@@ -163,15 +163,20 @@ class PlanParams:
 
 ## 5. UI-Seiten
 
+Navigation-Struktur (app.py):
+- **" "** (kein Titel): Startseite
+- **Input & Stammdaten**: Filialen, Umsatz-Import, Feiertage laden, Öffnungstage, Schulfilialen, Preisanpassung je Monat
+- **Berechnung & Validierung**: Planung ausführen, Herleitung, Planungsgenauigkeit
+
 | Seite | Datei | Funktion |
 |-------|-------|----------|
 | Startseite | 1_Startseite.py | Willkommen + DB-Auswahl |
-| Filialen | 2_Filialen.py | Stammdaten Filialen |
+| Filialen | 2_Filialen.py | Stammdaten Filialen – inline data_editor mit num_rows="dynamic", Delete-Bestätigung via session_state |
 | Umsatz-Import | 3_Daten_Import.py | IST-Daten hochladen (Excel/CSV), Validierung gegen Filialen-Stamm |
-| Öffnungstage | 9_Oeffnungstage.py | Wochentags- + Feiertags-Öffnung je Filiale, editierbar |
-| Feiertage laden | 8_Feiertage_Import.py | Auto-Import aller 16 Bundesländer + Fasching + Muttertag |
-| Parameter | 4_Parameter.py | Wachstum%, Stichtag, Ferien-Puffer |
-| Neue Filialen | 5_Neue_Filialen.py | Neue Filialen für Planjahr |
+| Feiertage laden | 8_Feiertage_Import.py | Multi-Jahr (2023–2036): Feiertage, Feiertagstage, Sondertage, Ramadan, Fasching (6 Tage), Schulferien, editierbar |
+| Öffnungstage | 9_Oeffnungstage.py | Wochentags- + Feiertags-Öffnung je Filiale, Default = geschlossen wenn keine Daten |
+| Schulfilialen | 12_Schulfilialen.py | Auto-Erkennung geschlossener Filialen in Ferien (≥80% Nullumsatz), Matrix-Editor |
+| Preisanpassung je Monat | 11_Preisanpassung.py | Monatliche Preisanpassung % je Planjahr, Kumuliert-Anzeige |
 | Planung ausführen | 6_Planung.py | Berechnung starten + Excel-Export |
 | Herleitung | 10_Herleitung.py | Wasserfall Tag/Woche/Monat × Filiale/BL/Gesamt |
 | Planungsgenauigkeit | 7_Planungsgenauigkeit.py | Plan vs. IST (aktuelles + Vorjahr) |
@@ -192,8 +197,12 @@ class PlanParams:
 - Alle 16 Bundesländer: `holidays.country_holidays("DE", subdiv=bl, years=year)`
 - Bundesweit-Flag: Feiertag ist in allen 16 Ländern vorhanden
 - `datum_vj`: Entsprechendes Datum im Basiszeitraum (für Öffnungserkennnung)
-- Fasching: Weiberfastnacht (Ostern−52), Rosenmontag (Ostern−48), Fastnachtsdienstag (Ostern−47)
-- Muttertag: 2. Sonntag im Mai
+- **Feiertagstage:** Tag vor + nach einem Feiertag; Sonntag→keine; Montag→auch Samstag (-2, -1, +1)
+- **Fasching:** 6 Tage ab Weiberfastnacht (Ostern-52): Do, Fr, Sa, So, Mo (Rosenmontag, -48), Di (Fastnacht, -47)
+- **Muttertag:** 2. Sonntag im Mai
+- **Ramadan:** Hardcoded-Dict 2023–2036 (ca. Gregorianische Daten)
+- **Schulferien:** `ferien_kalender`-Tabelle (bundesland, art, jahr, start, ende); holidays-Library unterstützt SCHOOL für DE nicht → manuelle Eingabe
+- **Ladezeitraum:** `LOAD_YEARS = range(2023, 2037)` (14 Jahre)
 
 ---
 
@@ -212,6 +221,9 @@ class PlanParams:
 | 1 | **Ramadan-Effekt** | Ähnlich Fasching: Sonderfaktor für betroffene Filialen. `apply_ramadan` in PlanParams bereits angelegt, Logik fehlt noch. |
 | 2 | **Fasching-Wirkung** | `apply_fasching` + `fasching_wirkung_pct` in PlanParams bereits angelegt. Warnung in UI wenn Fasching geladen: "Fasching-Wirkung% in Parameter setzen". Berechnung fehlt noch. |
 | 3 | **Warengruppen-Budget** | Artikelgruppen-Budgetierung bewusst ausgelassen (Out of Scope). |
+| 4 | **Feiertagsreferenz-Algorithmus** | Engine soll Feiertage mit umliegenden Sonntagen vergleichen (nicht gleiche Woche, nicht in Ferien, nicht in Woche mit anderem Feiertag, muss Umsatz haben). Aktuell einfacherer datum_vj-Ansatz. |
+| 5 | **Tooltip Herleitung** | Beim Hover über Feiertagseffekte sollen die verwendeten Vergleichstage angezeigt werden. |
+| 6 | **Schulferien Auto-Load** | holidays-Lib unterstützt SCHOOL-Kategorie für DE nicht. Aktuell nur manuelle Eingabe in ferien_kalender. |
 
 ---
 
@@ -240,3 +252,6 @@ class PlanParams:
 | `1911096` | Logo CSS fix, IST/Abw columns always visible in Planungsgenauigkeit |
 | `632dd3c` | Filial validation on import, logo rounded corners, Planungsgenauigkeit overhaul |
 | `b2f229f` | Logo above nav (st.logo), import UX fix, planning without params, Planungsgenauigkeit page added |
+| `e107e37` | CLAUDE.md erstellt mit vollständigem Projektwissen |
+| `634a543` | WIP: Schema-Erweiterungen (geplanter_umsatz_monat, ferien_kalender, filial_schulferien) + Filialen inline edit |
+| `594f7cb` | Filialen inline edit + Delete-Bestätigung, Feiertage multi-Jahr (2023–2036) + Feiertagstage + Ramadan + Schulferien, Schulfilialen-Seite (neu), Preisanpassung-Seite (neu), Öffnungstage Default=geschlossen, Navigation restructure (Annahmen entfernt) |
