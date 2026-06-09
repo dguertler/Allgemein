@@ -305,6 +305,21 @@ def _migrate(conn: sqlite3.Connection):
         )
     """)
 
+    # Sondertage → Feiertage migrieren (einmalig, falls noch nicht geschehen)
+    st_cols = {row[1] for row in conn.execute("PRAGMA table_info(sondertage)").fetchall()}
+    if st_cols:
+        conn.execute("""
+            INSERT OR IGNORE INTO feiertage (datum_plan, datum_vj, name, bundesland, art)
+            SELECT datum_plan, datum_referenz, bezeichnung, bundesland, 'Sondertag'
+            FROM sondertage
+            WHERE NOT EXISTS (
+                SELECT 1 FROM feiertage
+                WHERE feiertage.datum_plan = sondertage.datum_plan
+                  AND feiertage.name = sondertage.bezeichnung
+                  AND feiertage.art = 'Sondertag'
+            )
+        """)
+
     # Extend planung with additive effect columns
     plan_cols = {row[1] for row in conn.execute("PRAGMA table_info(planung)").fetchall()}
     for col in ["bundesland", "eff_oeffnung", "eff_verteilung", "eff_wochentag",

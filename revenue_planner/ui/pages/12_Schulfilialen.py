@@ -13,11 +13,11 @@ st.title("Schulfilialen")
 st.caption(f"Firma: **{get_gmbh()}**")
 
 st.info(
-    "Schulfilialen sind Filialen, die in Ferienzeitraeumen historisch geschlossen waren "
-    "(z.B. Baeckereien in Schulgebaeuden). Werden sie automatisch als geschlossen erkannt, "
-    "wird fuer diese Zeitraeume im Budgetjahr kein Umsatz geplant.\n\n"
-    "Die automatische Erkennung vergleicht die IST-Umstaetze in den Ferienwochen: "
-    "Hat eine Filiale in >= 80% der Ferientage keinen Umsatz gemeldet, wird sie als Schulfiliale markiert."
+    "Schulfilialen sind Filialen, die in Ferienzeiträumen historisch geschlossen waren "
+    "(z.B. Bäckereien in Schulgebäuden). Werden sie automatisch als geschlossen erkannt, "
+    "wird für diese Zeiträume im Budgetjahr kein Umsatz geplant.\n\n"
+    "Die automatische Erkennung vergleicht die IST-Umsätze in den Ferienwochen: "
+    "Hat eine Filiale in ≥ 80 % der Ferientage keinen Umsatz gemeldet, wird sie als Schulfiliale markiert."
 )
 
 
@@ -77,7 +77,7 @@ if st.button("Aus IST-Daten erkennen", type="secondary"):
                 VALUES (?,?,?,?)
             """, (fil_nr, ferien_art, bl, int(geschlossen)))
         conn.commit()
-        st.success(f"{len(detected)} Schulfilial-Eintraege erkannt und gespeichert.")
+        st.success(f"{len(detected)} Schulfilial-Einträge erkannt und gespeichert.")
         st.rerun()
 
 st.divider()
@@ -140,7 +140,7 @@ col_cfg = {
 for lbl in checkbox_cols:
     col_cfg[lbl] = st.column_config.CheckboxColumn(lbl, width=120)
 
-st.markdown("**Schulfilial-Matrix** (Haken = geschlossen waehrend dieser Ferienzeit):")
+st.markdown("**Schulfilial-Matrix** (Haken = geschlossen während dieser Ferienzeit):")
 edited_matrix = st.data_editor(
     df_matrix,
     use_container_width=True,
@@ -168,5 +168,5 @@ if st.button("Schulfilial-Zuordnung speichern", type="primary"):
             """, (fil_nr, art, bl, int(bool(val))))
             saved += 1
     conn.commit()
-    st.success(f"Gespeichert: {saved} Eintraege.")
+    st.success(f"Gespeichert: {saved} Einträge.")
     st.rerun()

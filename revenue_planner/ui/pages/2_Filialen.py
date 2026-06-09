@@ -1,4 +1,4 @@
-"""Branch management page — inline editable table."""
+"""Filialverwaltung — inline editierbare Tabelle."""
 import streamlit as st
 from pathlib import Path
 import sys
@@ -13,8 +13,15 @@ conn = get_conn()
 st.title("Filialverwaltung")
 st.caption(f"Firma: **{get_gmbh()}**")
 
-BUNDESLAENDER = ["BB", "BE", "BW", "BY", "HB", "HE", "HH", "MV",
-                 "NI", "NW", "RP", "SH", "SL", "SN", "ST", "TH"]
+BL_ABBR_TO_NAME = {
+    "BB": "Brandenburg", "BE": "Berlin", "BW": "Baden-Württemberg",
+    "BY": "Bayern", "HB": "Bremen", "HE": "Hessen", "HH": "Hamburg",
+    "MV": "Mecklenburg-Vorpommern", "NI": "Niedersachsen", "NW": "Nordrhein-Westfalen",
+    "RP": "Rheinland-Pfalz", "SH": "Schleswig-Holstein", "SL": "Saarland",
+    "SN": "Sachsen", "ST": "Sachsen-Anhalt", "TH": "Thüringen",
+}
+BL_NAME_TO_ABBR = {v: k for k, v in BL_ABBR_TO_NAME.items()}
+BUNDESLAENDER = sorted(BL_ABBR_TO_NAME.values())
 
 
 def _to_iso(v):
@@ -33,24 +40,34 @@ def _truthy(val) -> bool:
     return str(val).strip().lower() in ("1", "true", "ja", "yes", "x")
 
 
+def _bl_to_name(abbr_or_name: str) -> str:
+    """Konvertiert BL-Kürzel → vollen Namen. Gibt vollen Namen unverändert zurück."""
+    if not abbr_or_name:
+        return abbr_or_name
+    s = str(abbr_or_name).strip()
+    return BL_ABBR_TO_NAME.get(s, s)
+
+
 tab1, tab2 = st.tabs(["Filialen", "Massenimport"])
 
-# ── Tab 1: Inline editable table ──────────────────────────────────────────
+# ── Tab 1: Inline editierbare Tabelle ─────────────────────────────────────
 with tab1:
-    # Load from DB
     cols_needed = ["fil_nr", "bezeichnung", "bundesland", "eroeffnung_ende",
                    "flag_kein_wachstum", "eroeffnung", "geplanter_umsatz_monat"]
-    # Read only columns that exist
     existing_cols = [r[1] for r in conn.execute("PRAGMA table_info(filialen)").fetchall()]
     select_cols = [c for c in cols_needed if c in existing_cols]
     df = pd.read_sql(
         f"SELECT {', '.join(select_cols)} FROM filialen ORDER BY fil_nr",
-        conn
+        conn,
     )
-    # Ensure all expected columns exist even if DB hasn't been migrated yet
     for c in cols_needed:
         if c not in df.columns:
             df[c] = None
+
+    # Bundesland-Kürzel → voller Name
+    df["bundesland"] = df["bundesland"].apply(
+        lambda x: _bl_to_name(x) if x else x
+    )
 
     for col in ["eroeffnung", "eroeffnung_ende"]:
         df[col] = pd.to_datetime(df[col], errors="coerce")
@@ -59,35 +76,42 @@ with tab1:
         df["geplanter_umsatz_monat"], errors="coerce"
     ).fillna(0.0)
 
-    st.markdown(f"**{len(df)} Filialen** in der Datenbank  "
-                "(Zeilen direkt bearbeiten, neue Zeile unten anhaengen, dann Speichern)")
+    # Lösch-Spalte am Anfang
+    df.insert(0, "Löschen", False)
+
+    st.markdown(
+        f"**{len(df)} Filialen** in der Datenbank — "
+        "Zeilen direkt bearbeiten, neue Zeile unten anhängen, dann Speichern. "
+        "Zum Löschen die Checkbox in der ersten Spalte setzen."
+    )
 
     edited = st.data_editor(
         df,
         column_config={
+            "Löschen": st.column_config.CheckboxColumn("🗑️", width=45),
             "fil_nr": st.column_config.TextColumn("Fil.-Nr.", width=80),
             "bezeichnung": st.column_config.TextColumn("Bezeichnung"),
             "bundesland": st.column_config.SelectboxColumn(
-                "Bundesland", options=BUNDESLAENDER, width=90
+                "Bundesland", options=BUNDESLAENDER, width=190
             ),
             "eroeffnung_ende": st.column_config.DateColumn(
-                "Schliessdatum", format="DD.MM.YYYY", width=110
+                "Schließdatum", format="DD.MM.YYYY", width=120
             ),
             "flag_kein_wachstum": st.column_config.CheckboxColumn(
                 "Kein Wachstum", width=105
             ),
             "eroeffnung": st.column_config.DateColumn(
-                "Eroeffnung", format="DD.MM.YYYY", width=100
+                "Eröffnung", format="DD.MM.YYYY", width=110
             ),
             "geplanter_umsatz_monat": st.column_config.NumberColumn(
-                "Geplanter Umsatz/Monat EUR",
+                "Geplanter Umsatz/Monat €",
                 min_value=0,
                 format="%.0f",
-                width=170,
+                width=180,
             ),
         },
         column_order=[
-            "fil_nr", "bezeichnung", "bundesland", "eroeffnung_ende",
+            "Löschen", "fil_nr", "bezeichnung", "bundesland", "eroeffnung_ende",
             "flag_kein_wachstum", "eroeffnung", "geplanter_umsatz_monat",
         ],
         num_rows="dynamic",
@@ -97,7 +121,7 @@ with tab1:
         key="filialen_editor",
     )
 
-    # Validation warnings (non-blocking)
+    # Validierungs-Warnungen
     for _, row in edited.iterrows():
         fn = str(row.get("fil_nr", "")).strip()
         if not fn or _is_empty(fn):
@@ -107,42 +131,18 @@ with tab1:
         has_date = isinstance(eroff, pd.Timestamp) and not pd.isna(eroff)
         if has_date and gum == 0.0:
             st.warning(
-                f"Filiale {fn}: Eroeffnungsdatum gesetzt, aber 'Geplanter Umsatz/Monat' ist 0. "
+                f"Filiale {fn}: Eröffnungsdatum gesetzt, aber 'Geplanter Umsatz/Monat' ist 0. "
                 "Bitte Planwert eintragen."
             )
 
-    if st.button("Speichern", type="primary", key="save_filialen"):
-        # Determine deleted fil_nrs
-        db_fil_nrs = set(df["fil_nr"].dropna().astype(str).str.strip())
-        edited_fil_nrs = set(
-            str(r).strip()
-            for r in edited["fil_nr"].dropna()
-            if not _is_empty(str(r))
-        )
-        deleted = db_fil_nrs - edited_fil_nrs
+    to_delete = edited[edited["Löschen"] == True]["fil_nr"].dropna().astype(str).str.strip().tolist()
+    to_delete = [fn for fn in to_delete if fn and not _is_empty(fn)]
 
-        if deleted and not st.session_state.get("delete_confirmed"):
-            st.session_state["pending_delete"] = list(deleted)
-            st.session_state["pending_edited"] = edited.copy()
-            st.warning(
-                f"Folgende Filialen werden geloescht: **{', '.join(sorted(deleted))}**. "
-                "Alle zugehoerigen Planungsdaten werden entfernt."
-            )
-            c_yes, c_no, _ = st.columns([1, 1, 5])
-            if c_yes.button("Ja, loeschen", key="confirm_del_yes"):
-                st.session_state["delete_confirmed"] = True
-                st.rerun()
-            if c_no.button("Abbrechen", key="confirm_del_no"):
-                st.session_state.pop("pending_delete", None)
-                st.session_state.pop("pending_edited", None)
-                st.rerun()
-        else:
-            # Use confirmed edited df if available
-            save_df = st.session_state.pop("pending_edited", edited)
-            to_delete = st.session_state.pop("pending_delete", list(deleted))
-            st.session_state.pop("delete_confirmed", None)
+    col_save, col_del = st.columns([3, 2])
 
-            # Save all non-empty rows
+    with col_save:
+        if st.button("💾 Speichern", type="primary", key="save_filialen"):
+            save_df = edited[edited["Löschen"] != True].copy()
             saved = 0
             for _, row in save_df.iterrows():
                 fn = str(row.get("fil_nr", "")).strip()
@@ -165,7 +165,6 @@ with tab1:
                 """, (fn, bezeichnung, bl, eroeffnung_iso, eroeffnung_ende_iso,
                       kein_wachstum, gum))
 
-                # Sync to neue_filialen_plan when eroeffnung set and gum > 0
                 if eroeffnung_iso and gum > 0:
                     try:
                         eroff_date = date.fromisoformat(eroeffnung_iso)
@@ -180,28 +179,50 @@ with tab1:
                                 VALUES (?,?,?,?,?)
                             """, (fn, planjahr, monat, planwert, eroeffnung_iso))
                     except Exception:
-                        pass  # ignore sync errors silently
+                        pass
                 saved += 1
 
-            # Delete removed branches
-            for fn in to_delete:
-                conn.execute("DELETE FROM filialen WHERE fil_nr=?", (fn,))
-
             conn.commit()
-            msg = f"Gespeichert: {saved} Filialen."
-            if to_delete:
-                msg += f" Geloescht: {', '.join(sorted(to_delete))}."
-            st.success(msg)
+            st.success(f"✅ Gespeichert: {saved} Filialen.")
             st.rerun()
 
-# ── Tab 2: Bulk import ─────────────────────────────────────────────────────
+    with col_del:
+        if to_delete:
+            if st.button(
+                f"🗑️ {len(to_delete)} Filiale(n) löschen",
+                type="secondary",
+                key="del_marked_btn",
+            ):
+                st.session_state["pending_delete"] = to_delete
+                st.rerun()
+
+    if st.session_state.get("pending_delete"):
+        fns = st.session_state["pending_delete"]
+        st.warning(
+            f"Wollen Sie wirklich folgende Filiale(n) löschen? "
+            f"**{', '.join(sorted(fns))}**\n\n"
+            "Alle zugehörigen Planungsdaten werden ebenfalls entfernt."
+        )
+        c_yes, c_no, _ = st.columns([1, 1, 4])
+        if c_yes.button("Ja, löschen", key="del_confirm_yes", type="primary"):
+            for fn in fns:
+                conn.execute("DELETE FROM filialen WHERE fil_nr=?", (fn,))
+            conn.commit()
+            st.session_state.pop("pending_delete", None)
+            st.success(f"Gelöscht: {', '.join(sorted(fns))}")
+            st.rerun()
+        if c_no.button("Abbrechen", key="del_confirm_no"):
+            st.session_state.pop("pending_delete", None)
+            st.rerun()
+
+# ── Tab 2: Massenimport ────────────────────────────────────────────────────
 with tab2:
     st.subheader("Stammdaten aus Datei importieren")
     st.info("""
     **Pflichtfelder:** Filialnummer, Bundesland
-    **Optional:** Bezeichnung, Schliessdatum, Kein Wachstum, Eroeffnung, Geplanter Umsatz/Monat
+    **Optional:** Bezeichnung, Schließdatum, Kein Wachstum, Eröffnung, Geplanter Umsatz/Monat
 
-    Ein neuer Import **ueberschreibt alle bisherigen Stammdaten** vollstaendig.
+    Ein neuer Import **überschreibt alle bisherigen Stammdaten** vollständig.
     """)
 
     if "import_result" in st.session_state:
@@ -260,13 +281,13 @@ with tab2:
                 map_bezeichnung = st.selectbox("Bezeichnung *(optional)*", options_optional,
                     index=_idx(options_optional, auto.get("bezeichnung", NONE_OPTION)), key="map_bez")
             with c4:
-                map_eroeffnung_ende = st.selectbox("Schliessdatum *(optional)*", options_optional,
+                map_eroeffnung_ende = st.selectbox("Schließdatum *(optional)*", options_optional,
                     index=_idx(options_optional, auto.get("eroeffnung_ende", NONE_OPTION)), key="map_ende")
             with c5:
                 map_kein_wachstum = st.selectbox("Kein Wachstum *(optional)*", options_optional,
                     index=_idx(options_optional, auto.get("kein_wachstum", NONE_OPTION)), key="map_kw")
             with c6:
-                map_eroeffnung = st.selectbox("Eroeffnung *(optional)*", options_optional,
+                map_eroeffnung = st.selectbox("Eröffnung *(optional)*", options_optional,
                     index=_idx(options_optional, auto.get("eroeffnung", NONE_OPTION)), key="map_eroff")
             with c7:
                 map_gum = st.selectbox("Geplanter Umsatz/Monat *(optional)*", options_optional,
@@ -274,7 +295,7 @@ with tab2:
                     key="map_gum")
 
             if map_fil_nr == map_bundesland:
-                st.error("Filialnummer und Bundesland duerfen nicht dieselbe Spalte sein.")
+                st.error("Filialnummer und Bundesland dürfen nicht dieselbe Spalte sein.")
             else:
                 def _parse_date_str(val) -> str | None:
                     from datetime import datetime
@@ -289,19 +310,19 @@ with tab2:
 
                 preview = pd.DataFrame()
                 preview["Filialnummer"] = imp[map_fil_nr].str.strip()
-                preview["Bundesland"] = (
-                    imp[map_bundesland].str.strip().str.upper().str.replace("DE-", "", regex=False)
+                preview["Bundesland"] = imp[map_bundesland].str.strip().apply(
+                    lambda x: _bl_to_name(str(x).upper().replace("DE-", ""))
                 )
                 if map_bezeichnung != NONE_OPTION:
                     preview["Bezeichnung"] = imp[map_bezeichnung]
                 if map_eroeffnung_ende != NONE_OPTION:
-                    preview["Schliessdatum"] = imp[map_eroeffnung_ende].apply(
+                    preview["Schließdatum"] = imp[map_eroeffnung_ende].apply(
                         lambda x: _parse_date_str(x)
                     )
                 if map_kein_wachstum != NONE_OPTION:
                     preview["Kein Wachstum"] = imp[map_kein_wachstum].apply(_truthy)
                 if map_eroeffnung != NONE_OPTION:
-                    preview["Eroeffnung"] = imp[map_eroeffnung].apply(
+                    preview["Eröffnung"] = imp[map_eroeffnung].apply(
                         lambda x: _parse_date_str(x)
                     )
                 if map_gum != NONE_OPTION:
@@ -312,13 +333,13 @@ with tab2:
                 st.markdown(f"**Vorschau ({len(preview)} Zeilen):**")
                 st.dataframe(preview.head(10), use_container_width=True, hide_index=True)
 
-                if st.button("Importieren (bisherige Daten werden ueberschrieben)", type="primary"):
+                if st.button("Importieren (bisherige Daten werden überschrieben)", type="primary"):
                     conn.execute("DELETE FROM filialen")
                     imported, skipped = 0, []
 
                     for idx, row in preview.iterrows():
                         fn = str(row.get("Filialnummer", "")).strip()
-                        bl = str(row.get("Bundesland", "")).strip().upper().replace("DE-", "")
+                        bl = str(row.get("Bundesland", "")).strip()
 
                         if _is_empty(fn):
                             skipped.append({"Zeile": idx + 2, "Grund": "Filialnummer fehlt",
@@ -331,8 +352,8 @@ with tab2:
 
                         kw = int(bool(row.get("Kein Wachstum", False))) if "Kein Wachstum" in row else 0
                         gum = float(row.get("Geplanter Umsatz/Monat", 0) or 0) if "Geplanter Umsatz/Monat" in row else 0.0
-                        eroeffnung = row.get("Eroeffnung") if "Eroeffnung" in row else None
-                        eroeffnung_ende = row.get("Schliessdatum") if "Schliessdatum" in row else None
+                        eroeffnung = row.get("Eröffnung") if "Eröffnung" in row else None
+                        eroeffnung_ende = row.get("Schließdatum") if "Schließdatum" in row else None
 
                         conn.execute("""
                             INSERT INTO filialen

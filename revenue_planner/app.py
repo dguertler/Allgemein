@@ -19,7 +19,7 @@ ASSETS = BASE / "ui" / "assets"
 import base64
 
 
-def _logo_tag(path: Path, width: int = 65) -> str:
+def _logo_tag(path: Path, width: int = 130) -> str:
     if not path.exists():
         return ""
     b64 = base64.b64encode(path.read_bytes()).decode()
@@ -31,7 +31,7 @@ def _logo_tag(path: Path, width: int = 65) -> str:
     )
 
 
-def _combined_logo_bytes(paths: list, height: int = 44) -> bytes | None:
+def _combined_logo_bytes(paths: list, height: int = 88) -> bytes | None:
     """Build a combined PNG for st.logo() – plain white background, no transparency."""
     try:
         from PIL import Image
@@ -63,7 +63,7 @@ def _combined_logo_bytes(paths: list, height: int = 44) -> bytes | None:
 
 
 # ── Logos: st.logo() places above nav; CSS replicates the old HTML styling ─
-_logo_bytes = _combined_logo_bytes([ASSETS / "goertz_logo.png", ASSETS / "papperts_logo.png"])
+_logo_bytes = _combined_logo_bytes([ASSETS / "goertz_logo.png", ASSETS / "papperts_logo.png"], height=88)
 if _logo_bytes:
     st.logo(_logo_bytes, size="large")
     st.markdown("""
@@ -88,6 +88,15 @@ else:
             )
             st.divider()
 
+# ── Budgetjahr in Sidebar anzeigen ─────────────────────────────────────────
+from ui.session import get_gmbh, get_budgetjahr
+if get_gmbh():
+    st.sidebar.markdown(
+        f"<div style='padding:4px 0 8px 0;font-size:0.9rem;'>"
+        f"<b>Budgetjahr: {get_budgetjahr()}</b></div>",
+        unsafe_allow_html=True,
+    )
+
 # ── Navigation ─────────────────────────────────────────────────────────────
 pages = st.navigation({
     " ": [
@@ -102,7 +111,7 @@ pages = st.navigation({
         st.Page(str(BASE / "ui/pages/8_Feiertage_Import.py"),
                 title="Feiertage laden",        icon=":material/event:"),
         st.Page(str(BASE / "ui/pages/9_Oeffnungstage.py"),
-                title="Oeffnungstage",          icon=":material/calendar_month:"),
+                title="Öffnungstage",           icon=":material/calendar_month:"),
         st.Page(str(BASE / "ui/pages/12_Schulfilialen.py"),
                 title="Schulfilialen",          icon=":material/school:"),
         st.Page(str(BASE / "ui/pages/11_Preisanpassung.py"),
@@ -110,7 +119,7 @@ pages = st.navigation({
     ],
     "Berechnung & Validierung": [
         st.Page(str(BASE / "ui/pages/6_Planung.py"),
-                title="Planung ausfuehren",     icon=":material/calculate:"),
+                title="Planung ausführen",      icon=":material/calculate:"),
         st.Page(str(BASE / "ui/pages/10_Herleitung.py"),
                 title="Herleitung",             icon=":material/account_tree:"),
         st.Page(str(BASE / "ui/pages/7_Planungsgenauigkeit.py"),
