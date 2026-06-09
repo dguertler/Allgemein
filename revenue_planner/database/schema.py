@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS filialen (
     flag_inaktiv    INTEGER NOT NULL DEFAULT 0,   -- 1 = ab eroeffnung_ende geschlossen
     eroeffnung_ende TEXT,                   -- Schliessungsdatum
     ramadan_sensitiv INTEGER NOT NULL DEFAULT 0,  -- 1 = Filiale von Ramadan betroffen
+    geplanter_umsatz_monat REAL,               -- manueller Planwert je Monat (neue Filialen)
     notiz           TEXT
 );
 
@@ -54,12 +55,14 @@ CREATE TABLE IF NOT EXISTS parameter (
 
 -- ── Public holidays ────────────────────────────────────────────────────────
 -- Bundesland codes: "alle" = bundesweit, sonst ISO z.B. "DE-RP"
+-- art: 'feiertag' = gesetzlicher Feiertag, 'feiertagstag' = Vor-/Nachtag
 CREATE TABLE IF NOT EXISTS feiertage (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     datum_plan      TEXT NOT NULL,          -- ISO date im Planjahr
-    datum_vj        TEXT,                   -- ISO date im Vorjahr (für 1:1 Planung)
+    datum_vj        TEXT,                   -- ISO date im Vorjahr (fuer 1:1 Planung)
     name            TEXT NOT NULL,
-    bundesland      TEXT NOT NULL DEFAULT 'alle'
+    bundesland      TEXT NOT NULL DEFAULT 'alle',
+    art             TEXT NOT NULL DEFAULT 'feiertag'
 );
 CREATE INDEX IF NOT EXISTS idx_feiertage_datum ON feiertage(datum_plan);
 
@@ -138,8 +141,28 @@ CREATE TABLE IF NOT EXISTS filial_feiertag (
     PRIMARY KEY (fil_nr, feiertag_name)
 );
 
+-- ── School vacation calendar (loaded from library or manual) ────────────────
+CREATE TABLE IF NOT EXISTS ferien_kalender (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    bundesland TEXT NOT NULL,
+    art        TEXT NOT NULL,
+    jahr       INTEGER NOT NULL,
+    start      TEXT NOT NULL,
+    ende       TEXT NOT NULL,
+    UNIQUE(bundesland, art, jahr, start)
+);
+
+-- ── School branch mapping ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS filial_schulferien (
+    fil_nr      TEXT NOT NULL,
+    ferien_art  TEXT NOT NULL,
+    bundesland  TEXT NOT NULL,
+    geschlossen INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (fil_nr, ferien_art, bundesland)
+);
+
 -- ── Per-week vacation factors (computed, inspectable) ───────────────────────
--- woche: 1..n innerhalb der Ferien; faktor = Ø Umsatz Ferienwoche / Ø Puffer (2 Wo davor)
+-- woche: 1..n innerhalb der Ferien; faktor = Oe Umsatz Ferienwoche / Oe Puffer (2 Wo davor)
 CREATE TABLE IF NOT EXISTS ferien_faktor (
     fil_nr      TEXT NOT NULL,
     bundesland  TEXT NOT NULL,
@@ -212,10 +235,16 @@ def _migrate(conn: sqlite3.Connection):
     }
     additions = [
         ("flag_kein_wachstum", "INTEGER NOT NULL DEFAULT 0"),
+        ("geplanter_umsatz_monat", "REAL"),
     ]
     for col, definition in additions:
         if col not in existing:
             conn.execute(f"ALTER TABLE filialen ADD COLUMN {col} {definition}")
+
+    # Add art column to feiertage if missing
+    feiertage_cols = {row[1] for row in conn.execute("PRAGMA table_info(feiertage)").fetchall()}
+    if "art" not in feiertage_cols:
+        conn.execute("ALTER TABLE feiertage ADD COLUMN art TEXT NOT NULL DEFAULT 'feiertag'")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS parameter_monat (
@@ -226,7 +255,6 @@ def _migrate(conn: sqlite3.Connection):
         )
     """)
 
-    # New input/output tables (idempotent)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS filial_oeffnung (
             fil_nr      TEXT NOT NULL,
@@ -253,8 +281,27 @@ def _migrate(conn: sqlite3.Connection):
             PRIMARY KEY (fil_nr, bundesland, ferien_art, woche)
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ferien_kalender (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            bundesland TEXT NOT NULL,
+            art        TEXT NOT NULL,
+            jahr       INTEGER NOT NULL,
+            start      TEXT NOT NULL,
+            ende       TEXT NOT NULL,
+            UNIQUE(bundesland, art, jahr, start)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS filial_schulferien (
+            fil_nr      TEXT NOT NULL,
+            ferien_art  TEXT NOT NULL,
+            bundesland  TEXT NOT NULL,
+            geschlossen INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (fil_nr, ferien_art, bundesland)
+        )
+    """)
 
-    # Extend planung with additive effect columns
     plan_cols = {row[1] for row in conn.execute("PRAGMA table_info(planung)").fetchall()}
     for col in ["bundesland", "eff_oeffnung", "eff_verteilung", "eff_wochentag",
                 "eff_preis", "eff_ferien", "eff_feiertag", "eff_norm", "budget",
