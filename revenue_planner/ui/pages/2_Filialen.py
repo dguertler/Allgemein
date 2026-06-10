@@ -11,7 +11,6 @@ from datetime import date
 require_db()
 conn = get_conn()
 st.title("Filialverwaltung")
-st.caption(f"Firma: **{get_gmbh()}**")
 
 BL_ABBR_TO_NAME = {
     "BB": "Brandenburg", "BE": "Berlin", "BW": "Baden-Württemberg",
@@ -138,55 +137,62 @@ with tab1:
     to_delete = edited[edited["Löschen"] == True]["fil_nr"].dropna().astype(str).str.strip().tolist()
     to_delete = [fn for fn in to_delete if fn and not _is_empty(fn)]
 
-    col_save, col_del = st.columns([3, 2])
+    # Auto-save: detect changes (excluding Löschen column)
+    compare_cols = [c for c in df.columns if c != "Löschen"]
+    try:
+        orig_str = df[compare_cols].reset_index(drop=True).astype(str)
+        edit_str = edited[compare_cols].reset_index(drop=True).astype(str)
+        data_changed = not orig_str.equals(edit_str)
+    except Exception:
+        data_changed = True
 
-    with col_save:
-        if st.button("💾 Speichern", type="primary", key="save_filialen"):
-            save_df = edited[edited["Löschen"] != True].copy()
-            saved = 0
-            for _, row in save_df.iterrows():
-                fn = str(row.get("fil_nr", "")).strip()
-                if not fn or _is_empty(fn):
-                    continue
-                bl = str(row.get("bundesland") or "").strip()
-                if not bl:
-                    bl = BUNDESLAENDER[0]
-                bezeichnung = str(row.get("bezeichnung") or "").strip() or None
-                eroeffnung_iso = _to_iso(row.get("eroeffnung"))
-                eroeffnung_ende_iso = _to_iso(row.get("eroeffnung_ende"))
-                kein_wachstum = int(bool(row.get("flag_kein_wachstum")))
-                gum = float(row.get("geplanter_umsatz_monat") or 0)
+    if data_changed:
+        save_df = edited[edited["Löschen"] != True].copy()
+        saved = 0
+        for _, row in save_df.iterrows():
+            fn = str(row.get("fil_nr", "")).strip()
+            if not fn or _is_empty(fn):
+                continue
+            bl = str(row.get("bundesland") or "").strip()
+            if not bl:
+                bl = BUNDESLAENDER[0]
+            bezeichnung = str(row.get("bezeichnung") or "").strip() or None
+            eroeffnung_iso = _to_iso(row.get("eroeffnung"))
+            eroeffnung_ende_iso = _to_iso(row.get("eroeffnung_ende"))
+            kein_wachstum = int(bool(row.get("flag_kein_wachstum")))
+            gum = float(row.get("geplanter_umsatz_monat") or 0)
 
-                conn.execute("""
-                    INSERT OR REPLACE INTO filialen
-                        (fil_nr, bezeichnung, bundesland, eroeffnung, eroeffnung_ende,
-                         flag_kein_wachstum, geplanter_umsatz_monat)
-                    VALUES (?,?,?,?,?,?,?)
-                """, (fn, bezeichnung, bl, eroeffnung_iso, eroeffnung_ende_iso,
-                      kein_wachstum, gum))
+            conn.execute("""
+                INSERT OR REPLACE INTO filialen
+                    (fil_nr, bezeichnung, bundesland, eroeffnung, eroeffnung_ende,
+                     flag_kein_wachstum, geplanter_umsatz_monat)
+                VALUES (?,?,?,?,?,?,?)
+            """, (fn, bezeichnung, bl, eroeffnung_iso, eroeffnung_ende_iso,
+                  kein_wachstum, gum))
 
-                if eroeffnung_iso and gum > 0:
-                    try:
-                        eroff_date = date.fromisoformat(eroeffnung_iso)
-                        planjahr = eroff_date.year
-                        for monat in range(1, 13):
-                            planwert = gum * 0.5 if monat == eroff_date.month else gum
-                            if monat < eroff_date.month:
-                                planwert = 0.0
-                            conn.execute("""
-                                INSERT OR REPLACE INTO neue_filialen_plan
-                                    (fil_nr, planjahr, monat, planwert, eroeffnung_datum)
-                                VALUES (?,?,?,?,?)
-                            """, (fn, planjahr, monat, planwert, eroeffnung_iso))
-                    except Exception:
-                        pass
-                saved += 1
+            if eroeffnung_iso and gum > 0:
+                try:
+                    eroff_date = date.fromisoformat(eroeffnung_iso)
+                    pfj = eroff_date.year
+                    for monat in range(1, 13):
+                        planwert = gum * 0.5 if monat == eroff_date.month else gum
+                        if monat < eroff_date.month:
+                            planwert = 0.0
+                        conn.execute("""
+                            INSERT OR REPLACE INTO neue_filialen_plan
+                                (fil_nr, planjahr, monat, planwert, eroeffnung_datum)
+                            VALUES (?,?,?,?,?)
+                        """, (fn, pfj, monat, planwert, eroeffnung_iso))
+                except Exception:
+                    pass
+            saved += 1
 
+        if saved > 0:
             conn.commit()
-            st.success(f"✅ Gespeichert: {saved} Filialen.")
-            st.rerun()
+            st.toast(f"✓ {saved} Filiale(n) gespeichert", icon="✅")
 
-    with col_del:
+    col_del_area = st.container()
+    with col_del_area:
         if to_delete:
             if st.button(
                 f"🗑️ {len(to_delete)} Filiale(n) löschen",

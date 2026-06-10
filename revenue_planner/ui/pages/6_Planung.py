@@ -16,16 +16,19 @@ gmbh = get_gmbh()
 planjahr = get_budgetjahr()
 
 st.title("Planung ausführen")
-st.caption(f"Firma: **{gmbh}**")
 
 monat_rows = conn.execute(
     "SELECT monat, wachstum_pct FROM parameter_monat WHERE planjahr=?", (planjahr,)
 ).fetchall()
 wachstum_monat = {r["monat"]: r["wachstum_pct"] for r in monat_rows}
 
+# Basiszeitraum: full previous year when planjahr <= current year, rolling 12 months otherwise
+today = date.today()
+stichtag = date(today.year, 1, 1) if planjahr <= today.year else today
+
 params = PlanParams(
     planjahr=planjahr,
-    stichtag=date.today(),
+    stichtag=stichtag,
     preiserhoehung_pct=0.0,
     wachstum_monat=wachstum_monat,
     ferien_puffer_wochen=2,
@@ -35,22 +38,6 @@ _eng = PlanningEngine(conn, params)
 basis_label = _eng.base_window_label()
 
 MONATE_S = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
-
-# ── Info-Block: Budgetjahr + Basiszeitraum + aktive Parameter ──────────────
-with st.container(border=True):
-    ci1, ci2, ci3 = st.columns(3)
-    ci1.metric("Budgetjahr", planjahr)
-    ci2.metric("Basiszeitraum", basis_label)
-    ci3.metric("Ferien-Puffer", "2 Wochen")
-    if wachstum_monat:
-        st.dataframe(
-            pd.DataFrame([{MONATE_S[m - 1]: f"{wachstum_monat.get(m, 0.0):.1f} %" for m in range(1, 13)}]),
-            use_container_width=True,
-            hide_index=True,
-        )
-    else:
-        st.caption("Preisanpassung: keine (0 % je Monat)")
-    st.caption("Ramadan & Fasching sind derzeit nicht in der Berechnung berücksichtigt.")
 
 all_filialen = [r["fil_nr"] for r in
                 conn.execute("SELECT fil_nr FROM filialen ORDER BY fil_nr").fetchall()]
@@ -64,7 +51,35 @@ else:
 
 st.divider()
 
+# Check existing plan data for confirm dialog
+existing_check = conn.execute(
+    "SELECT COUNT(*) as n FROM planung WHERE CAST(strftime('%Y', datum) AS INTEGER)=?",
+    (planjahr,),
+).fetchone()
+existing_n = existing_check["n"] if existing_check else 0
+
 if st.button("🚀 Planung berechnen", type="primary", disabled=not selected_fils):
+    if existing_n > 0:
+        st.session_state["_confirm_replan"] = True
+    else:
+        st.session_state["_do_plan"] = True
+
+if st.session_state.get("_confirm_replan"):
+    st.warning(
+        f"Es existieren bereits **{existing_n:,}** geplante Tage für **{planjahr}**. "
+        "Wirklich neu berechnen? Die vorhandenen Daten werden überschrieben."
+    )
+    c1, c2, _ = st.columns([1.5, 1, 5])
+    if c1.button("✅ Ja, überschreiben", type="primary", key="confirm_yes"):
+        st.session_state["_confirm_replan"] = False
+        st.session_state["_do_plan"] = True
+        st.rerun()
+    if c2.button("❌ Abbrechen", key="confirm_no"):
+        st.session_state["_confirm_replan"] = False
+        st.rerun()
+
+if st.session_state.get("_do_plan"):
+    st.session_state["_do_plan"] = False
     with st.spinner(f"Berechne {len(selected_fils)} Filiale(n)…"):
         try:
             engine = PlanningEngine(conn, params)
@@ -79,7 +94,6 @@ if st.button("🚀 Planung berechnen", type="primary", disabled=not selected_fil
 
 
 def _de(val) -> str:
-    """Formatiert Zahl im deutschen Format: 80.000."""
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return ""
     return f"{float(val):,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -95,19 +109,18 @@ if "last_plan_results" in st.session_state and st.session_state.get("last_plan_j
         for r in results
     ])
 
-    # Filialen als neue vs. Bestandsfilialen klassifizieren
-    fil_ist_total = df.groupby("fil_nr")["ist_vj"].sum()
-    neue_fils = set(fil_ist_total[fil_ist_total == 0].index)
-
     budget_m = df.groupby(["fil_nr", "monat"])["budget"].sum().unstack(fill_value=0)
     ist_m    = df.groupby(["fil_nr", "monat"])["ist_vj"].sum().unstack(fill_value=0)
 
-    # Monatsspalten sicherstellen
     for m in range(1, 13):
         if m not in budget_m.columns:
             budget_m[m] = 0.0
         if m not in ist_m.columns:
             ist_m[m] = 0.0
+
+    # Per-month Bestandsfil. classification: fil has basis data (ist_vj > 0) for that month
+    fil_monat_ist = df.groupby(["fil_nr", "monat"])["ist_vj"].sum()
+    fil_monat_is_bestands = {k: float(v) > 0 for k, v in fil_monat_ist.items()}
 
     def _month_vals(pivot, fil, monate):
         if fil in pivot.index:
@@ -121,7 +134,7 @@ if "last_plan_results" in st.session_state and st.session_state.get("last_plan_j
         bud_sum = sum(bud)
         ist_sum = sum(ist)
         row_bud = {"Fil.-Nr.": fil_nr, "Typ": f"Budget {planjahr}"}
-        row_ist = {"Fil.-Nr.": "", "Typ": f"Basis {basis_label.split(' – ')[0][-4:] if ' – ' in basis_label else planjahr - 1}"}
+        row_ist = {"Fil.-Nr.": "", "Typ": "Basiszeitraum"}
         for i, mn in enumerate(MONATE_S):
             row_bud[mn] = _de(bud[i])
             row_ist[mn] = _de(ist[i]) if ist[i] != 0 else "—"
@@ -130,32 +143,50 @@ if "last_plan_results" in st.session_state and st.session_state.get("last_plan_j
         rows_display.append(row_bud)
         rows_display.append(row_ist)
 
-    # Summenzeilen
-    def _sum_rows(label, fils):
-        bud = [0.0] * 12
-        for fil in fils:
-            bv = _month_vals(budget_m, fil, range(1, 13))
-            bud = [bud[i] + bv[i] for i in range(12)]
+    # Sum rows with per-month Bestandsfil. classification
+    all_fils = sorted(df["fil_nr"].unique())
+    bestands_sets = {m: {f for f in all_fils if fil_monat_is_bestands.get((f, m), False)}
+                     for m in range(1, 13)}
+    neue_sets = {m: {f for f in all_fils if not fil_monat_is_bestands.get((f, m), False)}
+                 for m in range(1, 13)}
+
+    def _sum_rows_pm(label, month_sets):
         row = {"Fil.-Nr.": label, "Typ": f"Budget {planjahr}"}
-        for i, mn in enumerate(MONATE_S):
-            row[mn] = _de(bud[i])
-        row["Gesamt"] = _de(sum(bud))
+        total = 0.0
+        for i, m in enumerate(range(1, 13)):
+            val = sum(
+                (budget_m.at[fil, m] if (fil in budget_m.index and m in budget_m.columns) else 0.0)
+                for fil in month_sets.get(m, set())
+            )
+            row[MONATE_S[i]] = _de(val)
+            total += val
+        row["Gesamt"] = _de(total)
         return row
 
-    bestands_fils = [f for f in sorted(df["fil_nr"].unique()) if f not in neue_fils]
-    if bestands_fils:
+    has_bestands = any(bestands_sets[m] for m in range(1, 13))
+    has_neue = any(neue_sets[m] for m in range(1, 13))
+
+    if has_bestands:
         rows_display.append({"Fil.-Nr.": "", "Typ": ""})
-        rows_display.append(_sum_rows("∑ Bestandsfilialen", bestands_fils))
-    if neue_fils:
-        rows_display.append(_sum_rows("∑ Neue Filialen", sorted(neue_fils)))
-    rows_display.append(_sum_rows("∑ Gesamt", sorted(df["fil_nr"].unique())))
+        rows_display.append(_sum_rows_pm("∑ Bestandsfil.", bestands_sets))
+    if has_neue:
+        rows_display.append(_sum_rows_pm("∑ Neue Fil.", neue_sets))
+    rows_display.append(_sum_rows_pm("∑ Gesamt", {m: set(all_fils) for m in range(1, 13)}))
 
     disp_df = pd.DataFrame(rows_display).fillna("")
     cols_order = ["Fil.-Nr.", "Typ"] + MONATE_S + ["Gesamt"]
     disp_df = disp_df[[c for c in cols_order if c in disp_df.columns]]
 
+    # Bold sum rows and Gesamt column
+    def _apply_bold(row):
+        fil = str(row.get("Fil.-Nr.", ""))
+        is_sum = fil.startswith("∑")
+        return ["font-weight: bold" if (is_sum or c == "Gesamt") else "" for c in row.index]
+
+    styled = disp_df.style.apply(_apply_bold, axis=1)
+
     st.dataframe(
-        disp_df,
+        styled,
         use_container_width=True,
         hide_index=True,
         height=min(800, 36 * len(disp_df) + 40),

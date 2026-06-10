@@ -14,7 +14,6 @@ gmbh = get_gmbh()
 planjahr = get_budgetjahr()
 
 st.title("Herleitung der Budgetberechnung")
-st.caption(f"Firma: **{gmbh}** | Budgetjahr: **{planjahr}**")
 
 df_all = pd.read_sql(
     "SELECT * FROM planung WHERE CAST(strftime('%Y', datum) AS INTEGER)=?",

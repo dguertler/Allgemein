@@ -4,14 +4,13 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from ui.session import get_conn, get_gmbh, require_db
+from ui.session import get_conn, require_db
 from database.importer import detect_oeffnungstage
 import pandas as pd
 
 require_db()
 conn = get_conn()
 st.title("Öffnungstage")
-st.caption(f"Firma: **{get_gmbh()}**")
 
 st.markdown("""
 Aus den importierten Umsätzen wird automatisch erkannt, an welchen **Wochentagen**
@@ -47,6 +46,18 @@ if not filialen:
 
 tab1, tab2 = st.tabs(["Wochentage", "Feiertags-Öffnung"])
 
+
+def _df_changed(orig: pd.DataFrame, edited: pd.DataFrame) -> bool:
+    try:
+        if len(orig) != len(edited):
+            return True
+        return not orig.reset_index(drop=True).astype(str).equals(
+            edited.reset_index(drop=True).astype(str)
+        )
+    except Exception:
+        return True
+
+
 # ── Tab 1: Weekday opening (all branches, matrix) ──────────────────────────
 with tab1:
     st.subheader("Wochentags-Programm je Filiale")
@@ -59,29 +70,28 @@ with tab1:
         for wt in range(7):
             row[WT[wt]] = bool(oeff.get((f["fil_nr"], wt), False))
         data.append(row)
-    df = pd.DataFrame(data)
+    df_wt = pd.DataFrame(data)
 
-    edited = st.data_editor(
-        df, use_container_width=True, hide_index=True,
+    edited_wt = st.data_editor(
+        df_wt, use_container_width=True, hide_index=True,
         disabled=["Filiale", "Bezeichnung"],
         column_config={
             "Filiale":     st.column_config.TextColumn(width=80),
             "Bezeichnung": st.column_config.TextColumn(width=200),
             **{w: st.column_config.CheckboxColumn(w, width=55) for w in WT},
         },
-        key="oeff_editor",
+        key="oeff_wt_editor",
     )
 
-    if st.button("💾 Wochentage speichern", type="primary"):
-        for _, row in edited.iterrows():
+    if _df_changed(df_wt, edited_wt):
+        for _, row in edited_wt.iterrows():
             for wt in range(7):
                 conn.execute(
                     "INSERT OR REPLACE INTO filial_oeffnung (fil_nr, wochentag, offen) VALUES (?,?,?)",
                     (row["Filiale"], wt, int(bool(row[WT[wt]]))),
                 )
         conn.commit()
-        st.success("✅ Gespeichert.")
-        st.rerun()
+        st.toast("✓ Wochentage gespeichert", icon="✅")
 
 # ── Tab 2: Holiday opening (per branch) ────────────────────────────────────
 with tab2:
@@ -113,12 +123,11 @@ with tab2:
             height=400,
         )
 
-        if st.button("💾 Feiertags-Öffnung speichern", type="primary"):
+        if _df_changed(df_ft, edited_ft):
             for _, row in edited_ft.iterrows():
                 conn.execute(
                     "INSERT OR REPLACE INTO filial_feiertag (fil_nr, feiertag_name, offen) VALUES (?,?,?)",
                     (sel, row["Feiertag"], int(bool(row["Offen"]))),
                 )
             conn.commit()
-            st.success("✅ Gespeichert.")
-            st.rerun()
+            st.toast("✓ Feiertags-Öffnung gespeichert", icon="✅")

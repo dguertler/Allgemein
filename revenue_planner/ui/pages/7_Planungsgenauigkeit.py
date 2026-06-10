@@ -14,7 +14,6 @@ gmbh = get_gmbh()
 planjahr = get_budgetjahr()
 
 st.title("Planungsgenauigkeit")
-st.caption(f"Firma: **{gmbh}** | Budgetjahr: **{planjahr}**")
 
 plan_rows = conn.execute(
     "SELECT * FROM planung WHERE CAST(strftime('%Y', datum) AS INTEGER)=? ORDER BY fil_nr, datum",

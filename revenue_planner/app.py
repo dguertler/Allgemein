@@ -15,7 +15,6 @@ st.set_page_config(
 
 ASSETS = BASE / "ui" / "assets"
 
-
 import base64
 
 
@@ -28,6 +27,17 @@ def _logo_tag(path: Path, width: int = 130) -> str:
         f'<img src="data:image/{ext};base64,{b64}" '
         f'style="width:{width}px;background:#fff;padding:4px 6px;'
         f'border-radius:5px;object-fit:contain;">'
+    )
+
+
+def _logo_html(path: Path, height: int) -> str:
+    if not path.exists():
+        return ""
+    b64 = base64.b64encode(path.read_bytes()).decode()
+    ext = path.suffix.lstrip(".")
+    return (
+        f'<img src="data:image/{ext};base64,{b64}" '
+        f'style="height:{height}px;object-fit:contain;background:#fff;">'
     )
 
 
@@ -62,8 +72,8 @@ def _combined_logo_bytes(paths: list, height: int = 88) -> bytes | None:
         return None
 
 
-# ── Logos: st.logo() places above nav; CSS replicates the old HTML styling ─
-_logo_bytes = _combined_logo_bytes([ASSETS / "goertz_logo.png", ASSETS / "papperts_logo.png"], height=88)
+# ── Logos: sidebar (via st.logo) + top-right fixed (via HTML injection) ────
+_logo_bytes = _combined_logo_bytes([ASSETS / "goertz_logo.png", ASSETS / "papperts_logo.png"], height=44)
 if _logo_bytes:
     st.logo(_logo_bytes, size="large")
     st.markdown("""
@@ -77,7 +87,6 @@ if _logo_bytes:
 </style>
 """, unsafe_allow_html=True)
 else:
-    # Fallback: HTML logos in sidebar when Pillow unavailable
     with st.sidebar:
         g = _logo_tag(ASSETS / "goertz_logo.png")
         p_tag = _logo_tag(ASSETS / "papperts_logo.png")
@@ -88,12 +97,49 @@ else:
             )
             st.divider()
 
-# ── Budgetjahr in Sidebar anzeigen ─────────────────────────────────────────
+# ── Top-right logos (larger, fixed position) ───────────────────────────────
+_g_html = _logo_html(ASSETS / "goertz_logo.png", 70)
+_p_html = _logo_html(ASSETS / "papperts_logo.png", 70)
+if _g_html or _p_html:
+    st.markdown(
+        f'<div style="position:fixed;top:55px;right:15px;z-index:999;'
+        f'background:#fff;padding:6px 10px;border-radius:8px;'
+        f'display:flex;gap:10px;align-items:center;'
+        f'box-shadow:0 1px 6px rgba(0,0,0,0.15);">'
+        f'{_g_html}{_p_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+# ── Sidebar: Firma, Budgetjahr, Basiszeitraum ──────────────────────────────
 from ui.session import get_gmbh, get_budgetjahr
-if get_gmbh():
+from datetime import date, timedelta
+
+
+def _base_label(planjahr: int) -> str:
+    today = date.today()
+    stichtag = date(today.year, 1, 1) if planjahr <= today.year else today
+    last = stichtag.replace(day=1) - timedelta(days=1)
+    ey, em = last.year, last.month
+    m = em - 11
+    y = ey
+    while m <= 0:
+        m += 12
+        y -= 1
+    de = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
+          "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
+    return f"{de[m - 1]} {y} – {de[em - 1]} {ey}"
+
+
+_gmbh = get_gmbh()
+if _gmbh:
+    _planjahr = get_budgetjahr()
     st.sidebar.markdown(
-        f"<div style='padding:4px 0 8px 0;font-size:0.9rem;'>"
-        f"<b>Budgetjahr: {get_budgetjahr()}</b></div>",
+        f"<div style='padding:4px 0 12px 0;font-size:0.88rem;line-height:1.7;'>"
+        f"<b>Firma:</b> {_gmbh}<br>"
+        f"<b>Budgetjahr:</b> {_planjahr}<br>"
+        f"<b>Basiszeitraum:</b> {_base_label(_planjahr)}"
+        f"</div>",
         unsafe_allow_html=True,
     )
 

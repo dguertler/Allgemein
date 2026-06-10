@@ -13,7 +13,6 @@ conn = get_conn()
 budgetjahr = get_budgetjahr()
 
 st.title("Feiertage & Sondertage laden")
-st.caption(f"Firma: **{get_gmbh()}**")
 
 BL_ABBR_TO_NAME = {
     "BB": "Brandenburg", "BE": "Berlin", "BW": "Baden-Württemberg",
@@ -503,26 +502,23 @@ else:
 
     st.caption(f"{len(display_df)} Einträge für {filter_jahr}")
 
-    if st.button("Änderungen speichern", type="primary", key="save_unified"):
+    # Auto-save: detect changes and save without explicit button
+    def _ft_save(edited: pd.DataFrame, meta_list: list) -> int:
         saved = 0
-        meta_list = st.session_state.get("_ft_row_meta", [])
-
-        for idx, row in edited_df.iterrows():
+        ferien_arts = {"Ferien", "Sommerferien", "Winterferien",
+                       "Osterferien", "Herbstferien", "Pfingstferien"}
+        for idx, row in edited.iterrows():
             datum_val = row.get("Datum")
-            if datum_val is None or (hasattr(datum_val, "__class__") and str(datum_val) == "NaT"):
+            if datum_val is None or str(datum_val) == "NaT":
                 continue
-
             if hasattr(datum_val, "date"):
                 datum_iso = datum_val.date().isoformat()
             else:
                 datum_iso = str(datum_val)
 
             bis_val = row.get("Bis")
-            if bis_val is not None and str(bis_val) != "NaT" and str(bis_val) != "None":
-                if hasattr(bis_val, "date"):
-                    bis_iso = bis_val.date().isoformat()
-                else:
-                    bis_iso = str(bis_val)
+            if bis_val is not None and str(bis_val) not in ("NaT", "None", "nan"):
+                bis_iso = bis_val.date().isoformat() if hasattr(bis_val, "date") else str(bis_val)
             else:
                 bis_iso = None
 
@@ -533,9 +529,6 @@ else:
 
             if not name_val or not art_val:
                 continue
-
-            ferien_arts = {"Ferien", "Sommerferien", "Winterferien",
-                           "Osterferien", "Herbstferien", "Pfingstferien"}
 
             if idx < len(meta_list):
                 meta = meta_list[idx]
@@ -575,7 +568,20 @@ else:
                         VALUES (?,?,?,?,?)
                     """, (datum_iso, None, name_val, bl_db, art_db))
                     saved += 1
+        return saved
 
-        conn.commit()
-        st.success(f"{saved} Einträge gespeichert.")
-        st.rerun()
+    try:
+        orig_str = display_df.reset_index(drop=True).astype(str)
+        edit_str = edited_df.reset_index(drop=True).astype(str)
+        ft_changed = len(display_df) != len(edited_df) or not orig_str.equals(edit_str)
+    except Exception:
+        ft_changed = True
+
+    if ft_changed:
+        _saved = _ft_save(edited_df, st.session_state.get("_ft_row_meta", []))
+        if _saved > 0:
+            conn.commit()
+            st.toast(f"✓ {_saved} Einträge gespeichert", icon="✅")
+            if "ft_unified_editor" in st.session_state:
+                del st.session_state["ft_unified_editor"]
+            st.rerun()

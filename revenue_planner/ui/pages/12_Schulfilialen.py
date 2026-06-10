@@ -10,7 +10,6 @@ import pandas as pd
 require_db()
 conn = get_conn()
 st.title("Schulfilialen")
-st.caption(f"Firma: **{get_gmbh()}**")
 
 st.info(
     "Schulfilialen sind Filialen, die in Ferienzeiträumen historisch geschlossen waren "

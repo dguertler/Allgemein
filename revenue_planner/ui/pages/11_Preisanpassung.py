@@ -11,7 +11,6 @@ from datetime import date
 require_db()
 conn = get_conn()
 st.title("Preisanpassung je Monat (%)")
-st.caption(f"Firma: **{get_gmbh()}**")
 
 st.markdown("""
 Trage hier die geplante **Preisanpassung je Monat** in % ein
