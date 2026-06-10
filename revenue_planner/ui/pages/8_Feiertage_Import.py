@@ -437,7 +437,9 @@ def _build_display_df(ft_df: pd.DataFrame, fk_df: pd.DataFrame,
         grouped_rows = []
         grouped_meta = []
         key_cols = ["Datum", "Bis", "Name", "Art_disp"]
-        tmp["_key"] = tmp[key_cols].astype(str).agg("|".join, axis=1)
+        for col in key_cols:
+            tmp[col] = tmp[col].fillna("").astype(str)
+        tmp["_key"] = tmp[key_cols].agg("|".join, axis=1)
         for key, grp in tmp.groupby("_key", sort=False):
             bls = grp["Bundesland_raw"].tolist()
             if "Alle" in bls or len(bls) == len(BL_NAME_LIST):

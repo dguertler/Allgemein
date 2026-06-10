@@ -1,47 +1,31 @@
-"""Herleitung / Berechnung: step-by-step waterfall of how the budget is built up.
-
-Jede Effektspalte ist additiv: IST VJ + Summe(Effekte) = Budget. Dadurch lässt sich
-die Tabelle auf jeder Ebene (Tag/Woche/Monat/Jahr × Filiale/Bundesland/Gesamt)
-durch einfache Summenbildung aggregieren.
-"""
+"""Herleitung der Budgetberechnung — additive Effektzerlegung je Ebene."""
 import streamlit as st
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from ui.session import get_conn, get_gmbh, require_db
+from ui.session import get_conn, get_gmbh, require_db, get_budgetjahr
 import pandas as pd
 import io
 
 require_db()
 conn = get_conn()
 gmbh = get_gmbh()
+planjahr = get_budgetjahr()
+
 st.title("Herleitung der Budgetberechnung")
-st.caption(f"Firma: **{gmbh}**")
+st.caption(f"Firma: **{gmbh}** | Budgetjahr: **{planjahr}**")
 
-jahre = [r[0] for r in conn.execute(
-    "SELECT DISTINCT CAST(strftime('%Y', datum) AS INTEGER) FROM planung ORDER BY 1 DESC"
-).fetchall()]
-if not jahre:
-    st.info("Noch keine Planungsdaten vorhanden. Bitte zuerst unter **Planung ausführen** rechnen.")
-    st.stop()
-
-# ── Controls ───────────────────────────────────────────────────────────────
-c1, c2, c3 = st.columns(3)
-with c1:
-    planjahr = st.selectbox("Planjahr", jahre)
-with c2:
-    zeit_ebene = st.selectbox("Zeit-Ebene", ["Tag", "Woche", "Monat", "Jahr"], index=2)
-with c3:
-    entity_ebene = st.selectbox("Aggregations-Ebene", ["Filiale", "Bundesland", "Gesamt"])
-
-# Optional filter
 df_all = pd.read_sql(
     "SELECT * FROM planung WHERE CAST(strftime('%Y', datum) AS INTEGER)=?",
     conn, params=(planjahr,),
 )
+
 if df_all.empty:
-    st.warning("Keine Daten für dieses Jahr.")
+    st.info(
+        f"Noch keine Planungsdaten für {planjahr} vorhanden. "
+        "Bitte zuerst unter **Planung ausführen** eine Berechnung starten."
+    )
     st.stop()
 
 eff_cols = ["ist_vj", "eff_oeffnung", "eff_verteilung", "eff_wochentag",
@@ -49,13 +33,25 @@ eff_cols = ["ist_vj", "eff_oeffnung", "eff_verteilung", "eff_wochentag",
 for col in eff_cols:
     if col not in df_all.columns:
         df_all[col] = 0.0
-    df_all[col] = df_all[col].fillna(0.0)
+    df_all[col] = pd.to_numeric(df_all[col], errors="coerce").fillna(0.0)
+
+if "budget" not in df_all.columns or df_all["budget"].sum() == 0:
+    for alt in ["gesamt_plan", "tagesumsatz_plan"]:
+        if alt in df_all.columns:
+            df_all["budget"] = pd.to_numeric(df_all[alt], errors="coerce").fillna(0.0)
+            break
 
 df_all["datum"] = pd.to_datetime(df_all["datum"])
 if "bundesland" not in df_all.columns or df_all["bundesland"].isna().all():
-    # fallback aus filialen
     bl_map = {r[0]: r[1] for r in conn.execute("SELECT fil_nr, bundesland FROM filialen").fetchall()}
     df_all["bundesland"] = df_all["fil_nr"].map(bl_map).fillna("?")
+
+# ── Steuerung ──────────────────────────────────────────────────────────────
+c1, c2 = st.columns(2)
+with c1:
+    zeit_ebene = st.selectbox("Zeit-Ebene", ["Tag", "Woche", "Monat", "Jahr"], index=2)
+with c2:
+    entity_ebene = st.selectbox("Aggregations-Ebene", ["Filiale", "Bundesland", "Gesamt"])
 
 cf1, cf2 = st.columns(2)
 with cf1:
@@ -74,7 +70,7 @@ if fil_filter:
 if bl_filter:
     df_all = df_all[df_all["bundesland"].isin(bl_filter)]
 
-# ── Build group keys ───────────────────────────────────────────────────────
+# ── Zeit-Gruppierung ────────────────────────────────────────────────────────
 if zeit_ebene == "Tag":
     df_all["Zeit"] = df_all["datum"].dt.strftime("%d.%m.%Y")
     df_all["_sort"] = df_all["datum"]
@@ -86,7 +82,7 @@ elif zeit_ebene == "Monat":
     MON = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
     df_all["Zeit"] = df_all["datum"].dt.month.map(lambda m: MON[m - 1]) + " " + df_all["datum"].dt.year.astype(str)
     df_all["_sort"] = df_all["datum"].dt.to_period("M").apply(lambda p: p.start_time)
-else:  # Jahr
+else:
     df_all["Zeit"] = df_all["datum"].dt.year.astype(str)
     df_all["_sort"] = df_all["datum"].dt.year
 
@@ -104,51 +100,54 @@ agg = (df_all.groupby([k for k in group_keys if k != "_sort"], as_index=False)
 agg["Δ €"] = agg["budget"] - agg["ist_vj"]
 agg["Δ %"] = agg.apply(lambda x: round(x["Δ €"] / x["ist_vj"] * 100, 1) if x["ist_vj"] else None, axis=1)
 
-# ── Rename for display ─────────────────────────────────────────────────────
 rename = {
     "fil_nr": "Filiale", "bundesland": "Bundesland",
-    "ist_vj": "IST VJ", "eff_oeffnung": "+ Öffnung", "eff_verteilung": "+ Verteilung",
+    "ist_vj": "IST Basis", "eff_oeffnung": "+ Öffnung", "eff_verteilung": "+ Verteilung",
     "eff_wochentag": "+ Wochentag", "eff_preis": "+ Preis", "eff_ferien": "+ Ferien",
     "eff_feiertag": "+ Feiertag", "eff_norm": "+ Norm.", "budget": "= Budget",
 }
 disp = agg.drop(columns=["_sort"]).rename(columns=rename)
 
-lead = []
-if "Filiale" in disp.columns:
-    lead.append("Filiale")
-if "Bundesland" in disp.columns:
-    lead.append("Bundesland")
-lead.append("Zeit")
-ordered = lead + ["IST VJ", "+ Öffnung", "+ Verteilung", "+ Wochentag", "+ Preis",
+lead = [c for c in ["Filiale", "Bundesland", "Zeit"] if c in disp.columns]
+ordered = lead + ["IST Basis", "+ Öffnung", "+ Verteilung", "+ Wochentag", "+ Preis",
                   "+ Ferien", "+ Feiertag", "+ Norm.", "= Budget", "Δ €", "Δ %"]
-disp = disp[ordered]
+disp = disp[[c for c in ordered if c in disp.columns]]
 
-# ── Summary metrics ────────────────────────────────────────────────────────
+# ── Kennzahlen ─────────────────────────────────────────────────────────────
 tot_vj = agg["ist_vj"].sum()
 tot_bud = agg["budget"].sum()
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("IST Vorjahr (Basis)", f"{tot_vj:,.0f} €")
-m2.metric("Budget", f"{tot_bud:,.0f} €")
-m3.metric("Δ €", f"{tot_bud - tot_vj:+,.0f} €")
+
+def _de(val) -> str:
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return "–"
+    return f"{float(val):,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+m1.metric("IST Basis", f"{_de(tot_vj)} €")
+m2.metric("Budget", f"{_de(tot_bud)} €")
+m3.metric("Δ €", f"{'+' if tot_bud >= tot_vj else ''}{_de(tot_bud - tot_vj)} €")
 m4.metric("Δ %", f"{(tot_bud - tot_vj) / tot_vj * 100:+.1f} %" if tot_vj else "–")
 
 st.caption(
-    "Lesart: **IST VJ** ist der Umsatz des korrespondierenden Basistags. Jede `+`-Spalte "
-    "zeigt den additiven Effekt in € (Verteilung = Glättung Einzeltag→Wochentag, Wochentag = "
-    "Kalender-Wochentagsmix, Preis = geplante Anpassung, Ferien/Feiertag = Sonderkalender, "
-    "Norm. = Rückskalierung auf den Monatsplan). Summe ergibt **= Budget**."
+    "Lesart: **IST Basis** = Umsatz des korrespondierenden Basistags. "
+    "Jede `+`-Spalte zeigt den additiven Effekt in €. Summe ergibt **= Budget**."
 )
-
 st.divider()
 
-euro = st.column_config.NumberColumn(format="%.0f €")
-cfg = {c: euro for c in ["IST VJ", "+ Öffnung", "+ Verteilung", "+ Wochentag", "+ Preis",
-                         "+ Ferien", "+ Feiertag", "+ Norm.", "= Budget", "Δ €"]}
-cfg["Δ %"] = st.column_config.NumberColumn(format="%.1f %%")
+# ── Tabelle ─────────────────────────────────────────────────────────────────
+num_cols = ["IST Basis", "+ Öffnung", "+ Verteilung", "+ Wochentag", "+ Preis",
+            "+ Ferien", "+ Feiertag", "+ Norm.", "= Budget", "Δ €"]
 
-st.dataframe(disp, use_container_width=True, hide_index=True, column_config=cfg, height=560)
+def _fmt_de(val):
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return ""
+    return f"{float(val):,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-# ── Excel export ───────────────────────────────────────────────────────────
+styled = disp.style.format({c: _fmt_de for c in num_cols if c in disp.columns},
+                            na_rep="")
+st.dataframe(styled, use_container_width=True, hide_index=True, height=560)
+
+# ── Excel-Export ────────────────────────────────────────────────────────────
 st.divider()
 buf = io.BytesIO()
 with pd.ExcelWriter(buf, engine="openpyxl") as writer:
