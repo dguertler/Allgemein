@@ -60,12 +60,6 @@ if df["bundesland"].isna().all() or (df["bundesland"] == "").all():
     df["bundesland"] = df["fil_nr"].map(bl_map).fillna("?")
 
 # ── Steuerung ──────────────────────────────────────────────────────────────
-c1, c2 = st.columns(2)
-with c1:
-    zeit_ebene = st.selectbox("Zeit-Ebene", ["Tag", "Woche", "Monat", "Jahr"], index=2)
-with c2:
-    entity_ebene = st.selectbox("Aggregations-Ebene", ["Filiale", "Bundesland", "Gesamt"])
-
 cf1, cf2 = st.columns(2)
 with cf1:
     fil_filter = st.multiselect(
@@ -82,6 +76,12 @@ if fil_filter:
     df = df[df["fil_nr"].isin(fil_filter)]
 if bl_filter:
     df = df[df["bundesland"].isin(bl_filter)]
+
+c1, c2 = st.columns(2)
+with c1:
+    zeit_ebene = st.selectbox("Zeit-Ebene", ["Tag", "Woche", "Monat", "Jahr"], index=2)
+with c2:
+    entity_ebene = st.selectbox("Aggregations-Ebene", ["Filiale", "Bundesland", "Gesamt"])
 
 # ── Zeit-Gruppierung ────────────────────────────────────────────────────────
 MON = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]

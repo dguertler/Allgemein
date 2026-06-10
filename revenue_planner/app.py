@@ -73,7 +73,7 @@ if _logo_bytes:
     border-radius: 5px !important;
     object-fit: contain !important;
 }
-/* Center and style the running / loading indicator */
+/* Centered pretzel loading spinner */
 [data-testid="stStatusWidget"] {
     position: fixed !important;
     top: 50% !important;
@@ -81,12 +81,36 @@ if _logo_bytes:
     transform: translate(-50%, -50%) !important;
     z-index: 9999 !important;
     background: #fff !important;
-    border-radius: 16px !important;
-    padding: 14px 24px !important;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.22) !important;
+    border-radius: 20px !important;
+    padding: 24px 36px !important;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.25) !important;
     display: flex !important;
+    flex-direction: column !important;
     align-items: center !important;
-    gap: 10px !important;
+    gap: 8px !important;
+    min-width: 160px !important;
+}
+[data-testid="stStatusWidget"] > * {
+    display: none !important;
+}
+[data-testid="stStatusWidget"]::before {
+    content: "🥨";
+    font-size: 3rem;
+    display: inline-block !important;
+    animation: brezel-spin 1.5s linear infinite;
+    line-height: 1;
+}
+[data-testid="stStatusWidget"]::after {
+    content: "Loading...";
+    font-size: 1rem;
+    font-weight: 600;
+    color: #555;
+    display: inline-block !important;
+    letter-spacing: 0.05em;
+}
+@keyframes brezel-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
 }
 </style>
 """, unsafe_allow_html=True)

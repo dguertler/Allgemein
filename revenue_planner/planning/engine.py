@@ -612,6 +612,16 @@ class PlanningEngine:
         return out
 
     def save(self, results: list[DayPlan]):
+        if not results:
+            return
+        # Delete existing plan rows for these branches in this plan year
+        fil_nrs = list({r.fil_nr for r in results})
+        placeholders = ",".join("?" * len(fil_nrs))
+        self.conn.execute(
+            f"DELETE FROM planung WHERE fil_nr IN ({placeholders}) "
+            f"AND CAST(strftime('%Y', datum) AS INTEGER)=?",
+            fil_nrs + [self.p.planjahr],
+        )
         rows = [{
             "fil_nr": r.fil_nr, "datum": r.datum.isoformat(), "wochentag": r.wochentag,
             "bundesland": r.bundesland, "ist_vj": r.ist_vj,
