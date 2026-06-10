@@ -247,6 +247,7 @@ Navigation-Struktur (app.py):
 
 | Git-Hash | Beschreibung |
 |----------|-------------|
+| `4c3623f` | UX-Überarbeitung: Logos rechts oben (70px fixed), Sidebar Firma+Budgetjahr+Basiszeitraum, Firma-Captions entfernt, Auto-Speichern (Filialen/Öffnungstage/Feiertage), Planung: Basiszeitraum-Fix + Bestätigungsdialog + Bestandsfil.-pro-Monat + Fett-Summzeilen |
 | `93ce825` | Rolling base period, opening days (filial_oeffnung/feiertag), per-week vacation factors, additive Herleitung waterfall page, Lieferkunden removed |
 | `d036d04` | Auto holiday loader (all 16 Bundesländer + Fasching + Muttertag), monthly subtotals in Planungsgenauigkeit, multi-state holiday fix |
 | `1911096` | Logo CSS fix, IST/Abw columns always visible in Planungsgenauigkeit |
