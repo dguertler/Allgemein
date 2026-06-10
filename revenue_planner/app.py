@@ -30,17 +30,6 @@ def _logo_tag(path: Path, width: int = 130) -> str:
     )
 
 
-def _logo_html(path: Path, height: int) -> str:
-    if not path.exists():
-        return ""
-    b64 = base64.b64encode(path.read_bytes()).decode()
-    ext = path.suffix.lstrip(".")
-    return (
-        f'<img src="data:image/{ext};base64,{b64}" '
-        f'style="height:{height}px;object-fit:contain;background:#fff;">'
-    )
-
-
 def _combined_logo_bytes(paths: list, height: int = 88) -> bytes | None:
     """Build a combined PNG for st.logo() – plain white background, no transparency."""
     try:
@@ -72,8 +61,8 @@ def _combined_logo_bytes(paths: list, height: int = 88) -> bytes | None:
         return None
 
 
-# ── Logos: sidebar (via st.logo) + top-right fixed (via HTML injection) ────
-_logo_bytes = _combined_logo_bytes([ASSETS / "goertz_logo.png", ASSETS / "papperts_logo.png"], height=44)
+# ── Logos: sidebar only (via st.logo, double size) ────────────────────────
+_logo_bytes = _combined_logo_bytes([ASSETS / "goertz_logo.png", ASSETS / "papperts_logo.png"], height=88)
 if _logo_bytes:
     st.logo(_logo_bytes, size="large")
     st.markdown("""
@@ -83,6 +72,21 @@ if _logo_bytes:
     padding: 4px 6px !important;
     border-radius: 5px !important;
     object-fit: contain !important;
+}
+/* Center and style the running / loading indicator */
+[data-testid="stStatusWidget"] {
+    position: fixed !important;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(-50%, -50%) !important;
+    z-index: 9999 !important;
+    background: #fff !important;
+    border-radius: 16px !important;
+    padding: 14px 24px !important;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.22) !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 10px !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -96,20 +100,6 @@ else:
                 unsafe_allow_html=True,
             )
             st.divider()
-
-# ── Top-right logos (larger, fixed position) ───────────────────────────────
-_g_html = _logo_html(ASSETS / "goertz_logo.png", 70)
-_p_html = _logo_html(ASSETS / "papperts_logo.png", 70)
-if _g_html or _p_html:
-    st.markdown(
-        f'<div style="position:fixed;top:55px;right:15px;z-index:999;'
-        f'background:#fff;padding:6px 10px;border-radius:8px;'
-        f'display:flex;gap:10px;align-items:center;'
-        f'box-shadow:0 1px 6px rgba(0,0,0,0.15);">'
-        f'{_g_html}{_p_html}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
 
 # ── Sidebar: Firma, Budgetjahr, Basiszeitraum ──────────────────────────────
 from ui.session import get_gmbh, get_budgetjahr

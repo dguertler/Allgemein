@@ -183,6 +183,8 @@ if "last_plan_results" in st.session_state and st.session_state.get("last_plan_j
         is_sum = fil.startswith("∑")
         return ["font-weight: bold" if (is_sum or c == "Gesamt") else "" for c in row.index]
 
+    _max_cells = max(len(disp_df) * len(disp_df.columns), 262144)
+    pd.set_option("styler.render.max_elements", _max_cells)
     styled = disp_df.style.apply(_apply_bold, axis=1)
 
     st.dataframe(

@@ -142,9 +142,20 @@ def _fmt_de(val):
         return ""
     return f"{float(val):,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-styled = disp.style.format({c: _fmt_de for c in num_cols if c in disp.columns},
-                            na_rep="")
-st.dataframe(styled, use_container_width=True, hide_index=True, height=560)
+def _fmt_pct(val):
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return ""
+    return f"{float(val):+.1f} %"
+
+# Pre-format numeric columns directly (avoids Pandas Styler cell-limit issues)
+disp_fmt = disp.copy()
+for c in num_cols:
+    if c in disp_fmt.columns:
+        disp_fmt[c] = disp_fmt[c].apply(_fmt_de)
+if "Δ %" in disp_fmt.columns:
+    disp_fmt["Δ %"] = disp_fmt["Δ %"].apply(_fmt_pct)
+
+st.dataframe(disp_fmt, use_container_width=True, hide_index=True, height=560)
 
 # ── Excel-Export ────────────────────────────────────────────────────────────
 st.divider()
@@ -162,3 +173,42 @@ st.download_button(
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     type="primary",
 )
+
+# ── Legende ─────────────────────────────────────────────────────────────────
+st.divider()
+with st.expander("📖 Legende — Spaltenbezeichnungen und Berechnungslogik"):
+    st.markdown("""
+### Spaltenbedeutungen
+
+| Spalte | Bedeutung |
+|--------|-----------|
+| **IST Basis** | Tagesumsatz des korrespondierenden Basistags im Basiszeitraum (Vorjahr oder rollierend 12 Monate) |
+| **+ Öffnung** | Korrektur für neu hinzugekommene oder weggefallene Öffnungstage (z.B. neue Filiale öffnet samstags) |
+| **+ Verteilung** | Glättung vom tatsächlichen Einzeltag auf den Wochentagsdurchschnitt des Monats im Basiszeitraum |
+| **+ Wochentag** | Anpassung an den Wochentagsmix des Planjahres (z.B. mehr Montage im Jahr → Effekt auf Monatssumme) |
+| **+ Preis** | Preisanpassungs- / Wachstumseffekt gemäß hinterlegtem monatlichem Prozentsatz |
+| **+ Ferien** | Ferienfaktor: Verhältnis Ø Ferienwochenumsatz zu Ø Pufferwochenumsatz (je Ferienwoche ermittelt) |
+| **+ Feiertag** | Feiertagseffekt: Differenz Budget zu Normaltag (geschlossene Feiertage = negativer Wert) |
+| **+ Norm.** | Normalisierungs-Ausgleich: Rebalancing-Rest, damit die Tagessummen exakt auf den Monatswert aufgehen |
+| **= Budget** | Tagesbudget = Summe aller obigen Effekte + IST Basis |
+| **Δ €** | Absolute Veränderung: Budget − IST Basis |
+| **Δ %** | Relative Veränderung: Δ € / IST Basis × 100 |
+
+### Berechnungsformel (je Tag, exakt additiv)
+
+```
+Budget = IST Basis
+       + Öffnung
+       + Verteilung
+       + Wochentag
+       + Preis
+       + Ferien
+       + Feiertag
+       + Norm.
+```
+
+Diese additive Zerlegung gilt exakt auf Tagesebene und lässt sich durch Summation auf beliebige
+Zeit- und Aggregationsebenen (Woche / Monat / Jahr, Filiale / Bundesland / Gesamt) aufsummieren,
+ohne dass Rundungsfehler entstehen.
+""")
+

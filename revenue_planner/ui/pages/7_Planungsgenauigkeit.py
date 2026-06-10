@@ -163,10 +163,22 @@ def _fmt_de(val):
         return ""
     return f"{float(val):,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
+def _fmt_pct(val):
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return ""
+    return f"{float(val):+.1f} %"
+
 num_cols = ["IST Basis", "Budget", "IST aktuell", "Abw. €"]
-styled = disp.style.format({c: _fmt_de for c in num_cols if c in disp.columns},
-                            na_rep="")
-st.dataframe(styled, use_container_width=True, hide_index=True, height=560)
+
+# Pre-format numeric columns directly (avoids Pandas Styler cell-limit issues)
+disp_fmt = disp.copy()
+for c in num_cols:
+    if c in disp_fmt.columns:
+        disp_fmt[c] = disp_fmt[c].apply(_fmt_de)
+if "Abw. %" in disp_fmt.columns:
+    disp_fmt["Abw. %"] = disp_fmt["Abw. %"].apply(_fmt_pct)
+
+st.dataframe(disp_fmt, use_container_width=True, hide_index=True, height=560)
 
 # ── Excel-Export ────────────────────────────────────────────────────────────
 st.divider()
