@@ -50,13 +50,17 @@ def import_ist_umsatz(
                              col_map["umsatz"]: "umsatz"})
 
     # Normalise dates → ISO format (try ISO8601 first, fall back to dayfirst for European formats)
-    df["datum"] = pd.to_datetime(df["datum"], format="ISO8601", errors="coerce")
-    still_bad = df["datum"].isna()
+    raw_datum = df["datum"].copy()
+    parsed = pd.to_datetime(raw_datum, format="ISO8601", errors="coerce")
+    still_bad = parsed.isna()
     if still_bad.any():
-        df.loc[still_bad, "datum"] = pd.to_datetime(
-            df.loc[still_bad, df.columns[0]], dayfirst=True, errors="coerce"
+        # Fall back to European day-first parsing on the ORIGINAL strings.
+        # (Bug fixed 06/2026: previously re-parsed the already-coerced NaT
+        # column, silently dropping all German DD.MM.YYYY rows.)
+        parsed.loc[still_bad] = pd.to_datetime(
+            raw_datum.loc[still_bad], dayfirst=True, errors="coerce"
         )
-    df["datum"] = df["datum"].dt.strftime("%Y-%m-%d")
+    df["datum"] = parsed.dt.strftime("%Y-%m-%d")
     bad_dates = df["datum"].isna().sum()
     if bad_dates:
         warnings.append(f"{bad_dates} Zeilen mit ungültigem Datum wurden übersprungen.")
