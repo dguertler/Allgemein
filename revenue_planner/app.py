@@ -157,6 +157,8 @@ pages = st.navigation({
                 title="Preisanpassung je Monat", icon=":material/trending_up:"),
     ],
     "Berechnung & Validierung": [
+        st.Page(str(BASE / "ui/pages/14_Validierung.py"),
+                title="Plausibilitätsprüfung", icon=":material/checklist:"),
         st.Page(str(BASE / "ui/pages/6_Planung.py"),
                 title="Planung ausführen",   icon=":material/calculate:"),
         st.Page(str(BASE / "ui/pages/10_Herleitung.py"),
