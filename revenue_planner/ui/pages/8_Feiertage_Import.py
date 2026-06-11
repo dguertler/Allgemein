@@ -12,7 +12,7 @@ require_db()
 conn = get_conn()
 budgetjahr = get_budgetjahr()
 
-st.title("Feiertage & Sondertage laden")
+st.title("Feiertage, Ferien und Sondertage")
 
 BL_ABBR_TO_NAME = {
     "BB": "Brandenburg", "BE": "Berlin", "BW": "Baden-Württemberg",
@@ -342,17 +342,14 @@ if not jahre_available:
 jahre_sorted = sorted(jahre_available, reverse=True)
 default_idx = jahre_sorted.index(budgetjahr) if budgetjahr in jahre_sorted else 0
 
-col_fj, col_bl = st.columns([1, 2])
-with col_fj:
-    filter_jahr = st.selectbox("Jahr", jahre_sorted, index=default_idx, key="ft_view_jahr")
-with col_bl:
-    selected_bls = st.multiselect(
-        "Bundesland",
-        options=["Alle"] + BL_NAME_LIST,
-        default=["Alle"],
-        key="ft_view_bl",
-        placeholder="Bundesland auswählen...",
-    )
+filter_jahr = budgetjahr
+selected_bls = st.multiselect(
+    "Bundesland",
+    options=["Alle"] + BL_NAME_LIST,
+    default=["Alle"],
+    key="ft_view_bl",
+    placeholder="Bundesland auswählen...",
+)
 
 ft_year = ft_raw[ft_raw["datum_plan"].str.startswith(str(filter_jahr))].copy() if not ft_raw.empty else pd.DataFrame()
 fk_year = fk_raw[fk_raw["jahr"] == filter_jahr].copy() if not fk_raw.empty else pd.DataFrame()
@@ -379,8 +376,9 @@ def _art_display(art: str) -> str:
         "feiertagstag": "Feiertagstag",
         "sondertag": "Sondertag",
         "Sondertag": "Sondertag",
+        "ferien": "Ferien",
     }
-    return mapping.get(art, art)
+    return mapping.get(art, art.capitalize() if art else art)
 
 
 def _build_display_df(ft_df: pd.DataFrame, fk_df: pd.DataFrame,
@@ -402,7 +400,7 @@ def _build_display_df(ft_df: pd.DataFrame, fk_df: pd.DataFrame,
                 "_bl_abbr": r["bundesland"],
                 "Datum": r["datum_plan"],
                 "Bis": None,
-                "Name": r["name"],
+                "Beschreibung": r["name"],
                 "Bundesland_raw": bl_name,
                 "Art_raw": r["art"],
             })
@@ -420,14 +418,14 @@ def _build_display_df(ft_df: pd.DataFrame, fk_df: pd.DataFrame,
                 "_bl_abbr": r["bundesland"],
                 "Datum": r["start"],
                 "Bis": r["ende"],
-                "Name": r["art"],
+                "Beschreibung": r["art"],
                 "Bundesland_raw": bl_name,
                 "Art_raw": r["art"],
             })
             meta.append({"source": "ferien_kalender", "ids": [int(r["id"])]})
 
     if not rows:
-        empty_df = pd.DataFrame(columns=["Datum", "Bis", "Name", "Bundesland", "Art"])
+        empty_df = pd.DataFrame(columns=["Datum", "Bis", "Beschreibung", "Bundesland", "Art"])
         return empty_df, []
 
     tmp = pd.DataFrame(rows)
@@ -436,7 +434,7 @@ def _build_display_df(ft_df: pd.DataFrame, fk_df: pd.DataFrame,
     if show_all:
         grouped_rows = []
         grouped_meta = []
-        key_cols = ["Datum", "Bis", "Name", "Art_disp"]
+        key_cols = ["Datum", "Bis", "Beschreibung", "Art_disp"]
         for col in key_cols:
             tmp[col] = tmp[col].fillna("").astype(str)
         tmp["_key"] = tmp[key_cols].agg("|".join, axis=1)
@@ -452,7 +450,7 @@ def _build_display_df(ft_df: pd.DataFrame, fk_df: pd.DataFrame,
             grouped_rows.append({
                 "Datum": first["Datum"],
                 "Bis": first["Bis"],
-                "Name": first["Name"],
+                "Beschreibung": first["Beschreibung"],
                 "Bundesland": bl_disp,
                 "Art": first["Art_disp"],
             })
@@ -464,7 +462,7 @@ def _build_display_df(ft_df: pd.DataFrame, fk_df: pd.DataFrame,
     else:
         tmp["Bundesland"] = tmp["Bundesland_raw"]
         tmp["Art"] = tmp["Art_disp"]
-        display_df = tmp[["Datum", "Bis", "Name", "Bundesland", "Art"]].reset_index(drop=True)
+        display_df = tmp[["Datum", "Bis", "Beschreibung", "Bundesland", "Art"]].reset_index(drop=True)
         return display_df, meta
 
 
@@ -501,7 +499,7 @@ else:
         },
     )
 
-    st.caption(f"{len(display_df)} Einträge für {filter_jahr}")
+    st.caption(f"{len(display_df)} Einträge für {budgetjahr}")
 
     # Auto-save: detect changes and save without explicit button
     def _ft_save(edited: pd.DataFrame, meta_list: list) -> int:
@@ -523,7 +521,7 @@ else:
             else:
                 bis_iso = None
 
-            name_val = str(row.get("Name") or "").strip()
+            name_val = str(row.get("Beschreibung") or "").strip()
             art_val = str(row.get("Art") or "").strip()
             bl_val = str(row.get("Bundesland") or "Alle").strip()
             bl_db = "alle" if bl_val in ("Alle", "alle") else bl_val
@@ -571,10 +569,16 @@ else:
                     saved += 1
         return saved
 
+    def _norm_cmp(df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy().reset_index(drop=True)
+        for col in ["Datum", "Bis"]:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+        return df.astype(str)
+
     try:
-        orig_str = display_df.reset_index(drop=True).astype(str)
-        edit_str = edited_df.reset_index(drop=True).astype(str)
-        ft_changed = len(display_df) != len(edited_df) or not orig_str.equals(edit_str)
+        ft_changed = (len(display_df) != len(edited_df) or
+                      not _norm_cmp(display_df).equals(_norm_cmp(edited_df)))
     except Exception:
         ft_changed = True
 

@@ -40,7 +40,32 @@ uploaded = st.file_uploader(
     key=f"ist_uploader_{st.session_state['ist_upload_key']}",
 )
 
+# Check existing data
+existing_count = conn.execute("SELECT COUNT(*) FROM ist_umsatz").fetchone()[0]
+
 if st.button("⬆️ Importieren", type="primary", disabled=uploaded is None):
+    if existing_count > 0:
+        st.session_state["_confirm_import"] = True
+    else:
+        st.session_state["_do_import"] = True
+
+if st.session_state.get("_confirm_import"):
+    st.warning(
+        f"⚠️ Es sind bereits **{existing_count:,}** Datensätze vorhanden. "
+        "Ein Neuimport ersetzt alle bestehenden Daten für die enthaltenen Filialen und Daten. "
+        "Wirklich importieren?"
+    )
+    c1, c2, _ = st.columns([1.5, 1, 5])
+    if c1.button("✅ Ja, importieren", type="primary", key="import_confirm_yes"):
+        st.session_state["_confirm_import"] = False
+        st.session_state["_do_import"] = True
+        st.rerun()
+    if c2.button("❌ Abbrechen", key="import_confirm_no"):
+        st.session_state["_confirm_import"] = False
+        st.rerun()
+
+if st.session_state.get("_do_import"):
+    st.session_state["_do_import"] = False
     try:
         # Validate: all fil_nrs in the file must exist in filialen
         uploaded.seek(0)

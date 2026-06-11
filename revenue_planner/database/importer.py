@@ -73,7 +73,20 @@ def import_ist_umsatz(
     df = df[~empty_fil]
 
     # Normalise revenue → float, round to 2 decimal places
-    df["umsatz"] = pd.to_numeric(df["umsatz"].str.replace(",", "."), errors="coerce").round(2)
+    def _parse_num(s: str) -> float:
+        s = str(s).strip().replace('\xa0', '').replace(' ', '')
+        if ',' in s and '.' in s:
+            return pd.to_numeric(s.replace('.', '').replace(',', '.'), errors='coerce')
+        elif ',' in s:
+            return pd.to_numeric(s.replace(',', '.'), errors='coerce')
+        elif '.' in s:
+            parts = s.split('.')
+            if len(parts) > 1 and all(len(p) == 3 for p in parts[1:]):
+                return pd.to_numeric(s.replace('.', ''), errors='coerce')
+            return pd.to_numeric(s, errors='coerce')
+        return pd.to_numeric(s, errors='coerce')
+
+    df["umsatz"] = df["umsatz"].apply(_parse_num).round(2)
     bad_rev = df["umsatz"].isna().sum()
     if bad_rev:
         warnings.append(f"{bad_rev} Zeilen mit ungültigem Umsatz wurden übersprungen.")
