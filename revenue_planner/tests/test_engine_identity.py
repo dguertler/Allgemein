@@ -65,3 +65,15 @@ def test_normalize_bl():
     assert _normalize_bl("DE-BW") == "BW"
     assert _normalize_bl("BW") == "BW"
     assert _normalize_bl("") == "RP"
+
+
+def test_ferien_effect_applied(engine):
+    """BW branches have a real (non-zero) ferien effect during Osterferien 2026.
+
+    The fixture dips IST revenue by 40% during the prior-year Osterferien,
+    so the per-week ferien factor must produce negative eff_ferien days.
+    """
+    plans = engine.plan_branch("0002")
+    fer_days = [p for p in plans if p.tagestyp == "ferien"]
+    assert fer_days, "no ferien days planned for BW branch"
+    assert any(p.eff_ferien < 0 for p in fer_days), "ferien factor had no effect"

@@ -11,7 +11,6 @@ and seeds:
   - ferien_kalender: Osterferien BW 2025 and 2026
   - parameter_monat: planjahr 2026, all months wachstum_pct = 3.0
   - datumsmapping generated for planjahr 2026 (planning/datumsmapping.py)
-  - ferien table synced from ferien_kalender (same logic as 6_Planung)
 """
 import sqlite3
 import sys
@@ -34,27 +33,6 @@ BRANCH_FACTORS = {"0001": 1.0, "0002": 1.5, "0003": 0.8}
 BRANCH_BL = {"0001": "RP", "0002": "BW", "0003": "BW"}
 
 
-def sync_ferien_kalender_to_ferien(conn, planjahr):
-    """Replicates the (now removed) sync from 6_Planung for legacy comparisons."""
-    cur = conn.cursor()
-    plan_rows = cur.execute(
-        "SELECT bundesland, art, start, ende FROM ferien_kalender WHERE jahr=?",
-        (planjahr,)).fetchall()
-    vj_rows = {(r["bundesland"], r["art"]): r for r in cur.execute(
-        "SELECT bundesland, art, start, ende FROM ferien_kalender WHERE jahr=?",
-        (planjahr - 1,)).fetchall()}
-    cur.execute("DELETE FROM ferien WHERE start_plan LIKE ?", (f"{planjahr}-%",))
-    for r in plan_rows:
-        vj = vj_rows.get((r["bundesland"], r["art"]))
-        if not vj:
-            continue
-        cur.execute(
-            "INSERT OR IGNORE INTO ferien (bundesland, art, start_vj, ende_vj, start_plan, ende_plan) "
-            "VALUES (?,?,?,?,?,?)",
-            (r["bundesland"], r["art"], vj["start"], vj["ende"], r["start"], r["ende"]))
-    conn.commit()
-
-
 def make_test_db() -> sqlite3.Connection:
     """Build the deterministic in-memory test DB (also usable outside pytest)."""
     conn = sqlite3.connect(":memory:")
@@ -72,10 +50,16 @@ def make_test_db() -> sqlite3.Connection:
     rows = []
     d = date(2024, 1, 1)
     end = date(2025, 12, 31)
+    ferien_vj = (date(2025, 4, 14), date(2025, 4, 25))  # Osterferien BW 2025
     while d <= end:
         base = WEEKDAY_REVENUE[d.weekday()]
         for fil_nr, f in BRANCH_FACTORS.items():
-            rows.append((fil_nr, d.isoformat(), round(base * f, 2)))
+            val = base * f
+            # BW branches lose 40% during the prior-year Osterferien so the
+            # per-week ferien factor (and eff_ferien) is genuinely exercised.
+            if BRANCH_BL[fil_nr] == "BW" and ferien_vj[0] <= d <= ferien_vj[1]:
+                val *= 0.6
+            rows.append((fil_nr, d.isoformat(), round(val, 2)))
         d += timedelta(days=1)
     cur.executemany("INSERT INTO ist_umsatz (fil_nr, datum, umsatz) VALUES (?,?,?)", rows)
 
@@ -107,9 +91,6 @@ def make_test_db() -> sqlite3.Connection:
         "INSERT INTO parameter_monat (planjahr, monat, wachstum_pct) VALUES (?,?,?)",
         [(PLANJAHR, m, 3.0) for m in range(1, 13)])
     conn.commit()
-
-    # Keep legacy ferien table in sync (as 6_Planung used to do before each run)
-    sync_ferien_kalender_to_ferien(conn, PLANJAHR)
 
     # Generate datumsmapping for the plan year (like 13_Datumsmapping page does)
     from planning.engine import PlanningEngine, PlanParams

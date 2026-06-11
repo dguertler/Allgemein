@@ -189,9 +189,27 @@ class PlanningEngine:
                     "bundesland": r["bundesland"],
                 }
 
-        # Ferien Planjahr
-        rows = c.execute("SELECT * FROM ferien").fetchall()
-        self.ferien_plan: list[dict] = [dict(r) for r in rows]
+        # Ferien Planjahr — direkt aus ferien_kalender abgeleitet (eine Quelle
+        # der Wahrheit; ersetzt den früheren Sync ferien_kalender→ferien).
+        # Planjahr-Perioden + zugehörige Vorjahresperioden, gematcht über
+        # bundesland+art. Ohne Vorjahresperiode wird die Periode übersprungen
+        # (wie der frühere Sync). Die Legacy-Tabelle `ferien` ist deprecated.
+        plan_rows = c.execute(
+            "SELECT bundesland, art, start, ende FROM ferien_kalender WHERE jahr=?",
+            (p.planjahr,)).fetchall()
+        vj_rows = {(r["bundesland"], r["art"]): r for r in c.execute(
+            "SELECT bundesland, art, start, ende FROM ferien_kalender WHERE jahr=?",
+            (p.planjahr - 1,)).fetchall()}
+        self.ferien_plan: list[dict] = []
+        for r in plan_rows:
+            vj = vj_rows.get((r["bundesland"], r["art"]))
+            if not vj:
+                continue
+            self.ferien_plan.append({
+                "bundesland": r["bundesland"], "art": r["art"],
+                "start_vj": vj["start"], "ende_vj": vj["ende"],
+                "start_plan": r["start"], "ende_plan": r["ende"],
+            })
         self._build_ferien_windows()
 
         # IST-Daten (gesamt)
