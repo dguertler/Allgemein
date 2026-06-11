@@ -19,6 +19,50 @@ st.caption(f"Firma: **{get_gmbh()}** · Budgetjahr: **{planjahr}** · Vorjahr (B
 BUNDESLAENDER = ["BB", "BE", "BW", "BY", "HB", "HE", "HH", "MV",
                  "NI", "NW", "RP", "SH", "SL", "SN", "ST", "TH"]
 
+BL_ABBR_TO_NAME = {
+    "BB": "Brandenburg", "BE": "Berlin", "BW": "Baden-Württemberg",
+    "BY": "Bayern", "HB": "Bremen", "HE": "Hessen", "HH": "Hamburg",
+    "MV": "Mecklenburg-Vorpommern", "NI": "Niedersachsen", "NW": "Nordrhein-Westfalen",
+    "RP": "Rheinland-Pfalz", "SH": "Schleswig-Holstein", "SL": "Saarland",
+    "SN": "Sachsen", "ST": "Sachsen-Anhalt", "TH": "Thüringen",
+}
+BL_NAME_LIST = list(BL_ABBR_TO_NAME.values())
+
+
+def _bl_to_name(bl: str) -> str:
+    if not bl or str(bl).strip().lower() == "alle":
+        return "Alle"
+    return BL_ABBR_TO_NAME.get(str(bl).strip(), str(bl).strip())
+
+
+def _bl_to_abbr(name: str) -> str:
+    n = str(name or "").strip()
+    if not n or n.lower() == "alle":
+        return "alle"
+    for abbr, full in BL_ABBR_TO_NAME.items():
+        if full == n:
+            return abbr
+    return n
+
+
+def _iso(v):
+    """Convert editor cell value (Timestamp/date/str) to YYYY-MM-DD string or None."""
+    if v is None:
+        return None
+    ts = pd.to_datetime(v, errors="coerce")
+    if pd.isna(ts):
+        return None
+    return ts.strftime("%Y-%m-%d")
+
+
+def _norm_for_compare(df: pd.DataFrame, date_cols: list) -> pd.DataFrame:
+    """Normalize date columns to YYYY-MM-DD strings for stable DataFrame comparison."""
+    out = df.copy()
+    for c in date_cols:
+        if c in out.columns:
+            out[c] = pd.to_datetime(out[c], errors="coerce").dt.strftime("%Y-%m-%d")
+    return out.fillna("").astype(str)
+
 RAMADAN = {
     2023: ("2023-03-23", "2023-04-21"), 2024: ("2024-03-11", "2024-04-09"),
     2025: ("2025-03-01", "2025-03-30"), 2026: ("2026-02-18", "2026-03-19"),
@@ -249,36 +293,31 @@ st.divider()
 # ── Abschnitt 2: Gespeicherte Feiertage, Sondertage und Ferien ───────────────
 st.subheader("2. Gespeicherte Feiertage, Sondertage und Ferien")
 
-# Jahresfilter gemeinsam oben
-all_jahre = sorted(set(
-    [r[0] for r in conn.execute(
-        "SELECT DISTINCT CAST(substr(datum_plan,1,4) AS INTEGER) FROM feiertage"
-    ).fetchall()] +
-    [r[0] for r in conn.execute(
-        "SELECT DISTINCT CAST(substr(datum_plan,1,4) AS INTEGER) FROM sondertage"
-    ).fetchall()] +
-    [r[0] for r in conn.execute(
-        "SELECT DISTINCT jahr FROM ferien_kalender"
-    ).fetchall()]
-), reverse=True) or [planjahr]
-
-filter_jahr = st.selectbox("Jahr anzeigen", options=all_jahre, key="ft_jahr_global")
+# Anzeige nur für das Budgetjahr (kein Jahresfilter)
+filter_jahr = planjahr
+st.caption(f"Angezeigt wird das Budgetjahr **{planjahr}**.")
 
 tab_ft, tab_st, tab_fer = st.tabs(["Feiertage", "Sondertage", "Ferien"])
 
 # ── Tab Feiertage ──
 with tab_ft:
-    filter_art = st.selectbox("Art", ["alle", "feiertag", "feiertagstag"], key="ft_art_filter")
+    filter_art = st.selectbox("Art", ["alle", "Feiertag", "Feiertagstag"], key="ft_art_filter")
+    filter_art_raw = filter_art.lower()
 
     ft_all = pd.read_sql(
         "SELECT id, datum_plan, datum_vj, name, bundesland, art FROM feiertage "
         "WHERE datum_plan LIKE ? ORDER BY datum_plan, bundesland",
         conn, params=(f"{filter_jahr}-%",)
     )
-    if filter_art != "alle":
-        ft_all = ft_all[ft_all["art"] == filter_art]
+    if filter_art_raw != "alle":
+        ft_all = ft_all[ft_all["art"] == filter_art_raw]
 
     ft_orig = ft_all.drop(columns=["id"]).reset_index(drop=True)
+    # Anzeige-Transformation: Datumsspalten, BL ausgeschrieben, Art kapitalisiert
+    ft_orig["datum_plan"] = pd.to_datetime(ft_orig["datum_plan"], errors="coerce")
+    ft_orig["datum_vj"]   = pd.to_datetime(ft_orig["datum_vj"], errors="coerce")
+    ft_orig["bundesland"] = ft_orig["bundesland"].apply(_bl_to_name)
+    ft_orig["art"]        = ft_orig["art"].apply(lambda a: str(a).capitalize() if a else a)
 
     edited_ft = st.data_editor(
         ft_orig.copy(),
@@ -287,27 +326,32 @@ with tab_ft:
         key=f"ft_editor_{filter_jahr}_{filter_art}",
         height=350,
         column_config={
-            "datum_plan": st.column_config.TextColumn("Datum Plan (YYYY-MM-DD)"),
-            "datum_vj":   st.column_config.TextColumn("Datum VJ (YYYY-MM-DD)"),
-            "art":        st.column_config.SelectboxColumn("Art", options=["feiertag", "feiertagstag"]),
-            "bundesland": st.column_config.TextColumn("Bundesland"),
+            "datum_plan": st.column_config.DateColumn("Datum Plan", format="DD.MM.YYYY"),
+            "datum_vj":   st.column_config.DateColumn("Datum VJ", format="DD.MM.YYYY"),
+            "name":       st.column_config.TextColumn("Beschreibung"),
+            "art":        st.column_config.SelectboxColumn("Art", options=["Feiertag", "Feiertagstag"]),
+            "bundesland": st.column_config.SelectboxColumn("Bundesland",
+                                                           options=["Alle"] + BL_NAME_LIST),
         },
     )
     st.caption(f"{len(ft_orig)} Einträge für {filter_jahr}")
 
-    if not ft_orig.astype(str).equals(edited_ft.astype(str)):
+    _date_cols_ft = ["datum_plan", "datum_vj"]
+    if not _norm_for_compare(ft_orig, _date_cols_ft).equals(
+            _norm_for_compare(edited_ft, _date_cols_ft)):
         # Delete existing for this year+art, then re-insert
-        if filter_art == "alle":
+        if filter_art_raw == "alle":
             conn.execute("DELETE FROM feiertage WHERE datum_plan LIKE ?", (f"{filter_jahr}-%",))
         else:
             conn.execute("DELETE FROM feiertage WHERE datum_plan LIKE ? AND art=?",
-                         (f"{filter_jahr}-%", filter_art))
+                         (f"{filter_jahr}-%", filter_art_raw))
         for _, row in edited_ft.dropna(subset=["datum_plan", "name"]).iterrows():
             conn.execute(
                 "INSERT OR IGNORE INTO feiertage (datum_plan, datum_vj, name, bundesland, art) "
                 "VALUES (?,?,?,?,?)",
-                (row.get("datum_plan"), row.get("datum_vj"), row.get("name"),
-                 row.get("bundesland", "alle"), row.get("art", "feiertag"))
+                (_iso(row.get("datum_plan")), _iso(row.get("datum_vj")), row.get("name"),
+                 _bl_to_abbr(row.get("bundesland", "alle")),
+                 str(row.get("art") or "feiertag").lower())
             )
         conn.commit()
         dm_msg = _auto_datumsmapping(conn, planjahr)
@@ -322,6 +366,9 @@ with tab_st:
         conn, params=(f"{filter_jahr}-%",)
     )
     st_orig = st_all.drop(columns=["id"]).reset_index(drop=True)
+    st_orig["datum_plan"]     = pd.to_datetime(st_orig["datum_plan"], errors="coerce")
+    st_orig["datum_referenz"] = pd.to_datetime(st_orig["datum_referenz"], errors="coerce")
+    st_orig["bundesland"]     = st_orig["bundesland"].apply(_bl_to_name)
 
     edited_st = st.data_editor(
         st_orig.copy(),
@@ -330,23 +377,28 @@ with tab_st:
         key=f"st_editor_{filter_jahr}",
         height=350,
         column_config={
-            "datum_plan":      st.column_config.TextColumn("Datum Plan (YYYY-MM-DD)"),
-            "datum_referenz":  st.column_config.TextColumn("Datum Referenz (YYYY-MM-DD)"),
+            "datum_plan":      st.column_config.DateColumn("Datum Plan", format="DD.MM.YYYY"),
+            "datum_referenz":  st.column_config.DateColumn("Datum Referenz", format="DD.MM.YYYY"),
+            "bezeichnung":     st.column_config.TextColumn("Beschreibung"),
             "methode":         st.column_config.SelectboxColumn("Methode", options=["referenz", "samstag"]),
-            "bundesland":      st.column_config.TextColumn("Bundesland"),
+            "bundesland":      st.column_config.SelectboxColumn("Bundesland",
+                                                                options=["Alle"] + BL_NAME_LIST),
         },
     )
     st.caption(f"{len(st_orig)} Einträge für {filter_jahr}")
 
-    if not st_orig.astype(str).equals(edited_st.astype(str)):
+    _date_cols_st = ["datum_plan", "datum_referenz"]
+    if not _norm_for_compare(st_orig, _date_cols_st).equals(
+            _norm_for_compare(edited_st, _date_cols_st)):
         conn.execute("DELETE FROM sondertage WHERE datum_plan LIKE ?", (f"{filter_jahr}-%",))
         for _, row in edited_st.dropna(subset=["datum_plan", "bezeichnung"]).iterrows():
             conn.execute(
                 "INSERT OR IGNORE INTO sondertage "
                 "(datum_plan, datum_referenz, bezeichnung, methode, bundesland) "
                 "VALUES (?,?,?,?,?)",
-                (row.get("datum_plan"), row.get("datum_referenz"), row.get("bezeichnung"),
-                 row.get("methode", "referenz"), row.get("bundesland", "alle"))
+                (_iso(row.get("datum_plan")), _iso(row.get("datum_referenz")),
+                 row.get("bezeichnung"), row.get("methode", "referenz"),
+                 _bl_to_abbr(row.get("bundesland", "alle")))
             )
         conn.commit()
         dm_msg = _auto_datumsmapping(conn, planjahr)
@@ -357,14 +409,19 @@ with tab_st:
 with tab_fer:
     st.caption(
         "Schulferien manuell eintragen. Für beide Jahre (Vorjahr + Budgetjahr) werden "
-        "automatisch Ferienperioden für die Planung erstellt."
+        "automatisch Ferienperioden für die Planung erstellt. "
+        "Das Jahr wird automatisch aus dem Startdatum abgeleitet."
     )
     fk_all = pd.read_sql(
         "SELECT id, bundesland, art, jahr, start, ende FROM ferien_kalender "
         "WHERE jahr=? OR jahr=? ORDER BY jahr, bundesland, start",
         conn, params=(vj, planjahr)
     )
-    fk_orig = fk_all.drop(columns=["id"]).reset_index(drop=True)
+    # Keine redundante "Jahr"-Spalte in der Anzeige — wird aus Startdatum abgeleitet
+    fk_orig = fk_all.drop(columns=["id", "jahr"]).reset_index(drop=True)
+    fk_orig["start"] = pd.to_datetime(fk_orig["start"], errors="coerce")
+    fk_orig["ende"]  = pd.to_datetime(fk_orig["ende"], errors="coerce")
+    fk_orig["bundesland"] = fk_orig["bundesland"].apply(_bl_to_name)
 
     edited_fk = st.data_editor(
         fk_orig.copy(),
@@ -374,28 +431,26 @@ with tab_fer:
         height=350,
         column_config={
             "bundesland": st.column_config.SelectboxColumn("Bundesland",
-                                                            options=BUNDESLAENDER + ["alle"]),
-            "art":   st.column_config.TextColumn("Art (z.B. Sommerferien)"),
-            "jahr":  st.column_config.NumberColumn("Jahr", min_value=2020, max_value=2040, step=1),
-            "start": st.column_config.TextColumn("Start (YYYY-MM-DD)"),
-            "ende":  st.column_config.TextColumn("Ende (YYYY-MM-DD)"),
+                                                           options=["Alle"] + BL_NAME_LIST),
+            "art":   st.column_config.TextColumn("Beschreibung (z.B. Sommerferien)"),
+            "start": st.column_config.DateColumn("Start", format="DD.MM.YYYY"),
+            "ende":  st.column_config.DateColumn("Ende", format="DD.MM.YYYY"),
         },
     )
     st.caption(f"{len(fk_orig)} Einträge für {vj} + {planjahr}")
 
-    if not fk_orig.astype(str).equals(edited_fk.astype(str)):
+    _date_cols_fk = ["start", "ende"]
+    if not _norm_for_compare(fk_orig, _date_cols_fk).equals(
+            _norm_for_compare(edited_fk, _date_cols_fk)):
         conn.execute("DELETE FROM ferien_kalender WHERE jahr=? OR jahr=?", (vj, planjahr))
         for _, row in edited_fk.dropna(subset=["bundesland", "art"]).iterrows():
-            try:
-                jahr_val = int(row.get("jahr") or 0)
-            except (ValueError, TypeError):
-                continue
-            bl  = str(row.get("bundesland") or "").strip()
+            bl  = _bl_to_abbr(row.get("bundesland"))
             art = str(row.get("art") or "").strip()
-            s   = str(row.get("start") or "").strip()
-            e   = str(row.get("ende") or "").strip()
+            s   = _iso(row.get("start"))
+            e   = _iso(row.get("ende"))
             if not bl or not art or not s or not e:
                 continue
+            jahr_val = int(s[:4])
             conn.execute(
                 "INSERT OR IGNORE INTO ferien_kalender (bundesland, art, jahr, start, ende) "
                 "VALUES (?,?,?,?,?)", (bl, art, jahr_val, s, e)
