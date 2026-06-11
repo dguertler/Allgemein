@@ -32,7 +32,7 @@ ist_rows = conn.execute(
     "SELECT fil_nr, datum, umsatz FROM ist_umsatz WHERE datum LIKE ?",
     (f"{planjahr}-%",),
 ).fetchall()
-ist_lookup = {(r["fil_nr"], r["datum"]): r["umsatz"] for r in ist_rows}
+ist_lookup = {(str(r["fil_nr"]), r["datum"]): r["umsatz"] for r in ist_rows}
 has_ist = len(ist_lookup) > 0
 
 def _g(r, k, default=0.0):
@@ -43,13 +43,13 @@ def _g(r, k, default=0.0):
         return default
 
 df = pd.DataFrame([{
-    "fil_nr":     r["fil_nr"],
+    "fil_nr":     str(r["fil_nr"]),
     "datum":      r["datum"],
     "wochentag":  r["wochentag"],
     "bundesland": _g(r, "bundesland", "") or "",
     "IST Basis":  _g(r, "ist_vj"),
     "Budget":     _g(r, "budget") or _g(r, "tagesumsatz_plan") or _g(r, "gesamt_plan"),
-    "IST aktuell": ist_lookup.get((r["fil_nr"], r["datum"])),
+    "IST aktuell": ist_lookup.get((str(r["fil_nr"]), r["datum"])),
 } for r in plan_rows])
 
 df["datum_dt"] = pd.to_datetime(df["datum"])
@@ -65,11 +65,15 @@ with cf1:
     fil_filter = st.multiselect(
         "Filtern auf Filiale(n) (leer = alle)",
         sorted(df["fil_nr"].unique()),
+        placeholder="Filialen auswählen...",
+        key="plangenau_fil_filter",
     )
 with cf2:
     bl_filter = st.multiselect(
         "Filtern auf Bundesland (leer = alle)",
         sorted(df["bundesland"].dropna().unique()),
+        placeholder="Bundesland auswählen...",
+        key="plangenau_bl_filter",
     )
 
 if fil_filter:
@@ -79,9 +83,11 @@ if bl_filter:
 
 c1, c2 = st.columns(2)
 with c1:
-    zeit_ebene = st.selectbox("Zeit-Ebene", ["Tag", "Woche", "Monat", "Jahr"], index=2)
+    zeit_ebene = st.selectbox("Zeit-Ebene", ["Tag", "Woche", "Monat", "Jahr"], index=2,
+                               key="plangenau_zeit")
 with c2:
-    entity_ebene = st.selectbox("Aggregations-Ebene", ["Filiale", "Bundesland", "Gesamt"])
+    entity_ebene = st.selectbox("Aggregations-Ebene", ["Filiale", "Bundesland", "Gesamt"],
+                                 key="plangenau_entity")
 
 # ── Zeit-Gruppierung ────────────────────────────────────────────────────────
 MON = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]

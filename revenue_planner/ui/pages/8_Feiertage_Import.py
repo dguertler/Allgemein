@@ -351,6 +351,7 @@ with col_bl:
         options=["Alle"] + BL_NAME_LIST,
         default=["Alle"],
         key="ft_view_bl",
+        placeholder="Bundesland auswählen...",
     )
 
 ft_year = ft_raw[ft_raw["datum_plan"].str.startswith(str(filter_jahr))].copy() if not ft_raw.empty else pd.DataFrame()

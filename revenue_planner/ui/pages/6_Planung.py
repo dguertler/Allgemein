@@ -44,7 +44,8 @@ all_filialen = [r["fil_nr"] for r in
 
 run_mode = st.radio("Ausführen für", ["Alle Filialen", "Auswahl"])
 if run_mode == "Auswahl":
-    selected_fils = st.multiselect("Filialen auswählen", all_filialen)
+    selected_fils = st.multiselect("Filialen auswählen", all_filialen,
+                                   placeholder="Filialen auswählen...")
 else:
     selected_fils = all_filialen
     st.caption(f"{len(all_filialen)} Filialen")
