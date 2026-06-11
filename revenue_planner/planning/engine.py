@@ -33,6 +33,25 @@ from typing import Iterator
 import pandas as pd
 
 
+_BL_NAME_TO_ABBR = {
+    "Brandenburg": "BB", "Berlin": "BE", "Baden-Württemberg": "BW",
+    "Bayern": "BY", "Bremen": "HB", "Hessen": "HE", "Hamburg": "HH",
+    "Mecklenburg-Vorpommern": "MV", "Niedersachsen": "NI", "Nordrhein-Westfalen": "NW",
+    "Rheinland-Pfalz": "RP", "Schleswig-Holstein": "SH", "Saarland": "SL",
+    "Sachsen": "SN", "Sachsen-Anhalt": "ST", "Thüringen": "TH",
+    "DE-BB": "BB", "DE-BE": "BE", "DE-BW": "BW", "DE-BY": "BY",
+    "DE-HB": "HB", "DE-HE": "HE", "DE-HH": "HH", "DE-MV": "MV",
+    "DE-NI": "NI", "DE-NW": "NW", "DE-RP": "RP", "DE-SH": "SH",
+    "DE-SL": "SL", "DE-SN": "SN", "DE-ST": "ST", "DE-TH": "TH",
+}
+
+def _normalize_bl(bl: str) -> str:
+    """Normalize bundesland to 2-letter abbreviation."""
+    if not bl:
+        return "RP"
+    return _BL_NAME_TO_ABBR.get(bl, bl)
+
+
 # ── Data classes ──────────────────────────────────────────────────────────────
 
 @dataclass
@@ -436,7 +455,7 @@ class PlanningEngine:
     def plan_branch(self, fil_nr: str) -> list[DayPlan]:
         self._ferien_cache: dict[tuple, float] = {}
         fil = self.filialen.get(fil_nr, {"bundesland": "RP"})
-        bl = fil.get("bundesland", "RP") or "RP"
+        bl = _normalize_bl(fil.get("bundesland", "RP") or "RP")
         results: list[DayPlan] = []
         py = self.p.planjahr
 
@@ -474,6 +493,7 @@ class PlanningEngine:
                     closed = True
                 elif ft and not self._is_open_feiertag(fil_nr, ft["name"]):
                     closed = True
+                    feiertag_name = ft["name"]
 
                 if not closed:
                     if ft:

@@ -79,10 +79,48 @@ if st.session_state.get("_confirm_replan"):
         st.session_state["_confirm_replan"] = False
         st.rerun()
 
+def _sync_ferien_kalender_to_ferien(conn_db, planjahr: int):
+    """Synchronize ferien_kalender to ferien table for engine use."""
+    cur = conn_db.cursor()
+    plan_rows = cur.execute(
+        "SELECT bundesland, art, start, ende FROM ferien_kalender WHERE jahr=?",
+        (planjahr,)
+    ).fetchall()
+    if not plan_rows:
+        return 0
+
+    vj = planjahr - 1
+    vj_rows = {
+        (r["bundesland"], r["art"]): r
+        for r in cur.execute(
+            "SELECT bundesland, art, start, ende FROM ferien_kalender WHERE jahr=?",
+            (vj,)
+        ).fetchall()
+    }
+
+    cur.execute("DELETE FROM ferien WHERE start_plan LIKE ?", (f"{planjahr}-%",))
+
+    inserted = 0
+    for r in plan_rows:
+        bl = r["bundesland"]
+        art = r["art"]
+        vj_r = vj_rows.get((bl, art))
+        if not vj_r:
+            continue
+        cur.execute("""
+            INSERT OR IGNORE INTO ferien (bundesland, art, start_vj, ende_vj, start_plan, ende_plan)
+            VALUES (?,?,?,?,?,?)
+        """, (bl, art, vj_r["start"], vj_r["ende"], r["start"], r["ende"]))
+        inserted += 1
+    conn_db.commit()
+    return inserted
+
+
 if st.session_state.get("_do_plan"):
     st.session_state["_do_plan"] = False
     with st.spinner(f"Berechne {len(selected_fils)} Filiale(n)…"):
         try:
+            _sync_ferien_kalender_to_ferien(conn, planjahr)
             engine = PlanningEngine(conn, params)
             results = engine.run(selected_fils)
             engine.save(results)

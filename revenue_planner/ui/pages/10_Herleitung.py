@@ -137,8 +137,11 @@ def _build_tagesinfo(tagestyp, feiertag_name, ferien_art):
     ferien = ferien_art or ""
     if typ in ("feiertag", "sondertag") and name:
         parts.append(name)
-    if typ == "geschlossen":
-        parts.append("Geschlossen")
+    elif typ == "geschlossen":
+        if name:
+            parts.append(f"Geschlossen ({name})")
+        else:
+            parts.append("Geschlossen")
     if ferien:
         parts.append(ferien)
     return " | ".join(parts) if parts else ""
