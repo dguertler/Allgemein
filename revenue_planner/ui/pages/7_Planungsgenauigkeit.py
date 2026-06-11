@@ -117,13 +117,13 @@ agg = (df.groupby([k for k in group_keys if k != "_sort"], as_index=False)
                                   else [group_keys[0], "_sort"])]))
 
 agg["Abw. €"] = agg.apply(
-    lambda x: round(x["IST aktuell"] - x["Budget"], 2)
-    if pd.notna(x["IST aktuell"]) else None,
+    lambda x: round(float(x["IST aktuell"]) - float(x["Budget"]), 2)
+    if not pd.isna(x["IST aktuell"]) else None,
     axis=1,
 )
 agg["Abw. %"] = agg.apply(
-    lambda x: round(x["Abw. €"] / x["Budget"] * 100, 1)
-    if pd.notna(x.get("Abw. €")) and x["Budget"] != 0 else None,
+    lambda x: round(float(x["Abw. €"]) / float(x["Budget"]) * 100, 1)
+    if not pd.isna(x["Abw. €"]) and float(x["Budget"]) != 0 else None,
     axis=1,
 )
 
@@ -159,14 +159,26 @@ st.divider()
 
 # ── Tabelle ─────────────────────────────────────────────────────────────────
 def _fmt_de(val):
-    if val is None or (isinstance(val, float) and pd.isna(val)):
+    try:
+        if pd.isna(val):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    try:
+        return f"{float(val):,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except (TypeError, ValueError):
         return ""
-    return f"{float(val):,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def _fmt_pct(val):
-    if val is None or (isinstance(val, float) and pd.isna(val)):
+    try:
+        if pd.isna(val):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    try:
+        return f"{float(val):+.1f} %"
+    except (TypeError, ValueError):
         return ""
-    return f"{float(val):+.1f} %"
 
 num_cols = ["IST Basis", "Budget", "IST aktuell", "Abw. €"]
 

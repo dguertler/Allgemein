@@ -97,11 +97,41 @@ if entity_ebene == "Filiale":
 elif entity_ebene == "Bundesland":
     group_keys = ["bundesland"] + group_keys
 
+extra_agg = {}
+if zeit_ebene == "Tag":
+    for c in ["wochentag", "tagestyp", "feiertag_name", "ferien_art"]:
+        if c in df_all.columns:
+            extra_agg[c] = "first"
+
 agg = (df_all.groupby([k for k in group_keys if k != "_sort"], as_index=False)
-       .agg({**{c: "sum" for c in eff_cols}, "_sort": "min"})
+       .agg({**{c: "sum" for c in eff_cols}, "_sort": "min", **extra_agg})
        .sort_values([k for k in (["_sort"] if entity_ebene == "Gesamt"
                                   else [group_keys[0], "_sort"])]))
 agg = agg.reset_index(drop=True)
+
+WT_MAP = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+
+def _build_tagesinfo(tagestyp, feiertag_name, ferien_art):
+    parts = []
+    typ = tagestyp or ""
+    name = feiertag_name or ""
+    ferien = ferien_art or ""
+    if typ in ("feiertag", "sondertag") and name:
+        parts.append(name)
+    if typ == "geschlossen":
+        parts.append("Geschlossen")
+    if ferien:
+        parts.append(ferien)
+    return " | ".join(parts) if parts else ""
+
+if zeit_ebene == "Tag":
+    if "wochentag" in agg.columns:
+        agg["_wt_str"] = agg["wochentag"].apply(
+            lambda w: WT_MAP[int(w)] if pd.notna(w) else "")
+    agg["_tagesinfo"] = agg.apply(
+        lambda r: _build_tagesinfo(
+            r.get("tagestyp", ""), r.get("feiertag_name", ""), r.get("ferien_art", "")),
+        axis=1)
 
 agg["Δ €"] = agg["budget"] - agg["ist_vj"]
 agg["Δ %"] = agg.apply(lambda x: round(x["Δ €"] / x["ist_vj"] * 100, 1) if x["ist_vj"] else None, axis=1)
@@ -112,9 +142,19 @@ rename = {
     "eff_wochentag": "+ Wochentag", "eff_preis": "+ Preis", "eff_ferien": "+ Ferien",
     "eff_feiertag": "+ Feiertag", "eff_norm": "+ Norm.", "budget": "= Budget",
 }
-disp = agg.drop(columns=["_sort"]).rename(columns=rename)
+if zeit_ebene == "Tag":
+    rename["Zeit"] = "Datum"
+    rename["_wt_str"] = "Wochentag"
+    rename["_tagesinfo"] = "Tagesinfo"
 
-lead = [c for c in ["Filiale", "Bundesland", "Zeit"] if c in disp.columns]
+drop_cols = ["_sort"] + [c for c in ["wochentag", "tagestyp", "feiertag_name", "ferien_art"]
+                          if c in agg.columns and zeit_ebene == "Tag"]
+disp = agg.drop(columns=[c for c in drop_cols if c in agg.columns]).rename(columns=rename)
+
+if zeit_ebene == "Tag":
+    lead = [c for c in ["Filiale", "Bundesland", "Datum", "Wochentag", "Tagesinfo"] if c in disp.columns]
+else:
+    lead = [c for c in ["Filiale", "Bundesland", "Zeit"] if c in disp.columns]
 ordered = lead + ["IST Basis", "+ Öffnung", "+ Verteilung", "+ Wochentag", "+ Preis",
                   "+ Ferien", "+ Feiertag", "+ Norm.", "= Budget", "Δ €", "Δ %"]
 disp = disp[[c for c in ordered if c in disp.columns]]
@@ -146,14 +186,26 @@ num_cols = ["IST Basis", "+ Öffnung", "+ Verteilung", "+ Wochentag", "+ Preis",
             "+ Ferien", "+ Feiertag", "+ Norm.", "= Budget", "Δ €"]
 
 def _fmt_de(val):
-    if val is None or (isinstance(val, float) and pd.isna(val)):
+    try:
+        if pd.isna(val):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    try:
+        return f"{float(val):,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except (TypeError, ValueError):
         return ""
-    return f"{float(val):,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def _fmt_pct(val):
-    if val is None or (isinstance(val, float) and pd.isna(val)):
+    try:
+        if pd.isna(val):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    try:
+        return f"{float(val):+.1f} %"
+    except (TypeError, ValueError):
         return ""
-    return f"{float(val):+.1f} %"
 
 disp_fmt = disp.copy()
 for c in num_cols:
@@ -254,36 +306,38 @@ if sel_rows:
             # Day-level breakdown (only for aggregated views)
             if not detail_df.empty and zeit_ebene != "Tag":
                 with st.expander(f"📅 Tagesdetails ({len(detail_df)} Tage)"):
-                    day_cols = ["datum", "tagestyp", "feiertag_name", "ferien_art",
+                    day_cols = ["datum", "wochentag", "tagestyp", "feiertag_name", "ferien_art",
                                 "ist_vj", "eff_oeffnung", "eff_verteilung", "eff_wochentag",
                                 "eff_preis", "eff_ferien", "eff_feiertag", "eff_norm", "budget"]
                     day_cols = [c for c in day_cols if c in detail_df.columns]
                     day_show = detail_df[day_cols].copy()
-                    day_show["datum"] = day_show["datum"].dt.strftime("%d.%m.%Y")
+                    day_show["Datum"] = day_show["datum"].dt.strftime("%d.%m.%Y")
+                    if "wochentag" in day_show.columns:
+                        day_show["Wochentag"] = day_show["wochentag"].apply(
+                            lambda w: WT_MAP[int(w)] if pd.notna(w) else "")
+                    day_show["Tagesinfo"] = day_show.apply(
+                        lambda r: _build_tagesinfo(
+                            r.get("tagestyp", ""), r.get("feiertag_name", ""), r.get("ferien_art", "")),
+                        axis=1)
                     for c in ["ist_vj", "eff_oeffnung", "eff_verteilung", "eff_wochentag",
                                "eff_preis", "eff_ferien", "eff_feiertag", "eff_norm", "budget"]:
                         if c in day_show.columns:
                             day_show[c] = day_show[c].apply(_fmt_de)
+                    day_show = day_show.drop(columns=[c for c in
+                        ["datum", "wochentag", "tagestyp", "feiertag_name", "ferien_art"]
+                        if c in day_show.columns])
                     day_show = day_show.rename(columns={
-                        "datum": "Datum", "tagestyp": "Typ",
-                        "feiertag_name": "Feiertag/Sondertag", "ferien_art": "Ferienperiode",
                         "ist_vj": "IST Basis", "eff_oeffnung": "+ Öffnung",
                         "eff_verteilung": "+ Verteilung", "eff_wochentag": "+ Wochentag",
                         "eff_preis": "+ Preis", "eff_ferien": "+ Ferien",
                         "eff_feiertag": "+ Feiertag", "eff_norm": "+ Norm.", "budget": "= Budget",
                     }).fillna("")
+                    show_order = ["Datum", "Wochentag", "Tagesinfo"] + [
+                        c for c in ["IST Basis", "+ Öffnung", "+ Verteilung", "+ Wochentag",
+                                    "+ Preis", "+ Ferien", "+ Feiertag", "+ Norm.", "= Budget"]
+                        if c in day_show.columns]
+                    day_show = day_show[[c for c in show_order if c in day_show.columns]]
                     st.dataframe(day_show, use_container_width=True, hide_index=True)
-            elif not detail_df.empty and zeit_ebene == "Tag" and len(detail_df) > 0:
-                row = detail_df.iloc[0]
-                typ = row.get("tagestyp", "") or "normal"
-                name = row.get("feiertag_name", "") or ""
-                ferien = row.get("ferien_art", "") or ""
-                info_md = f"**Tagestyp:** {typ}"
-                if name:
-                    info_md += f"  |  **Feiertag/Sondertag:** {name}"
-                if ferien:
-                    info_md += f"  |  **Ferienperiode:** {ferien}"
-                st.caption(info_md)
 
 # ── Excel-Export ────────────────────────────────────────────────────────────
 st.divider()

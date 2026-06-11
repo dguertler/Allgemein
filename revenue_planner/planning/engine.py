@@ -143,12 +143,14 @@ class PlanningEngine:
         p = self.p
         c = self.conn.cursor()
 
-        # Feiertage Planjahr: {datum_plan → list of {name, datum_vj, bundesland}}
-        rows = c.execute("SELECT datum_plan, datum_vj, name, bundesland FROM feiertage").fetchall()
+        # Feiertage Planjahr: {datum_plan → list of {name, datum_vj, bundesland, art}}
+        # Only art='feiertag' — feiertagstage (Vor-/Nachtage) are treated as normal open days
+        rows = c.execute("SELECT datum_plan, datum_vj, name, bundesland, art FROM feiertage").fetchall()
         self.feiertage: dict[str, list[dict]] = {}
         for r in rows:
             self.feiertage.setdefault(r["datum_plan"], []).append(
-                {"name": r["name"], "datum_vj": r["datum_vj"], "bundesland": r["bundesland"]}
+                {"name": r["name"], "datum_vj": r["datum_vj"], "bundesland": r["bundesland"],
+                 "art": r["art"] if r["art"] else "feiertag"}
             )
 
         # Sondertage
@@ -377,7 +379,7 @@ class PlanningEngine:
 
     def _relevant_feiertag(self, iso: str, bl: str) -> dict | None:
         for ft in self.feiertage.get(iso, []):
-            if ft["bundesland"] in ("alle", bl):
+            if ft["bundesland"] in ("alle", bl) and ft.get("art", "feiertag") == "feiertag":
                 return ft
         return None
 
