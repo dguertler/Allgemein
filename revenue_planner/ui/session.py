@@ -20,6 +20,13 @@ def get_gmbh() -> str:
 def open_db(gmbh_name: str):
     path = get_db_path(gmbh_name, str(DATA_DIR))
     conn = init_db(path)
+    # Firmenwechsel: Budgetjahr zurücksetzen, damit kein Restwert der
+    # vorherigen Firma aktiv bleibt. get_budgetjahr() fällt dann auf den
+    # Default (heute+1) zurück; die Startseite wählt anschließend ggf. ein
+    # in der neuen DB vorhandenes Jahr aus.
+    if st.session_state.get("gmbh_name") != gmbh_name:
+        st.session_state.pop("budgetjahr", None)
+        st.session_state.pop("bj_select", None)  # Selectbox-Widget der Startseite
     st.session_state.db_conn = conn
     st.session_state.gmbh_name = gmbh_name
     st.session_state.db_path = str(path)
