@@ -421,6 +421,8 @@ Aus Sicht Senior Controlling / Beratung. Priorisiert:
 | 3 | **BL-Normalisierung an der Quelle**: beim Anlegen/Editieren von Filialen normalisieren statt (nur) in der Engine. | Konsistenz |
 | 4 | **Engine-Performance**: `_ist_on()` filtert pro Tag das gesamte IST-DataFrame (O(Tage×Zeilen)). Bei 255 Filialen × 365 Tagen langsam. Lösung: Lookup-Dict `{(fil_nr, iso): umsatz}` einmalig bauen. | Laufzeit |
 | 5 | **Validierungs-/Plausibilitätsseite**: automatische Checks vor Planung (Filialen ohne BL, Ferien ohne VJ-Periode, Feiertage ohne datum_vj, Monate ohne Basisumsatz, IST-Lücken im Basisfenster) mit Ampel-Anzeige. | Fehlerprävention |
+| 5a | **Wachstums-Redundanz**: 4_Parameter (Tab "Wachstum") UND 11_Preisanpassung schreiben beide in `parameter_monat.wachstum_pct` — zwei Seiten, gleiche Daten, Überschreibungsrisiko bei parallelem Edit. Eine Seite entfernen oder klar trennen. | Datenintegrität |
+| 5b | **Budgetjahr-Session-Handling** (session.py): `get_budgetjahr()` Default = heute+1, kein Fallback auf DB; bei Firmenwechsel (`open_db`) wird das Budgetjahr NICHT zurückgesetzt — Restwert der vorherigen Firma bleibt aktiv. | Falsche Jahresbasis möglich |
 
 ### 12.3 Offen — mittlere Priorität
 | # | Thema |
@@ -432,6 +434,8 @@ Aus Sicht Senior Controlling / Beratung. Priorisiert:
 | 10 | `ensure_filialen_from_ist` nutzt Default "DE-RP" (Alt-Format) — auf "RP" umstellen |
 | 11 | Schulferien Auto-Load (holidays-Lib kann SCHOOL für DE nicht) — externe Quelle/API prüfen |
 | 12 | Warengruppen-Budget: bewusst Out of Scope. |
+| 13 | `liefer_plan` ist Dead Code (immer 0.0, engine.py save) — Spalte/Feld bei nächster Aufräumrunde entfernen bzw. ignorieren dokumentieren. |
+| 14 | `_ferien_cache` wird je `plan_branch()`-Aufruf neu initialisiert statt auf Engine-Ebene — funktional korrekt, aber Faktoren werden je Filiale neu gerechnet (Performance). |
 
 ### 12.4 Architektur-Leitplanken (bei jeder Änderung beachten)
 1. Additive Identität ist heilig — jeder neue Effekt muss additiv in € sein und
