@@ -43,8 +43,15 @@ revenue_planner/
 │   └── importer.py                 # IST-Import, detect_oeffnungstage, ensure_filialen_from_ist
 ├── planning/
 │   ├── engine.py                   # Kern-Planungslogik (PlanningEngine, PlanParams, DayPlan)
+│   │                               #   plan_branch = Orchestrator über _day_status/_day_raw/
+│   │                               #   _normalize_month/_build_dayplan (Pipeline)
 │   ├── datumsmapping.py            # Generator für datumsmapping-Tabelle (wochentagsbasiertes Matching)
 │   └── export.py                   # Excel-Export der Planung
+├── tests/                          # pytest-Regressionssuite (s. Abschnitt 12.0)
+│   ├── conftest.py                 # In-Memory-DB-Fixture (make_test_db/make_engine)
+│   ├── test_engine_identity.py     # Additive Identität, Normierung, BL, Ferieneffekt
+│   ├── test_importer.py            # Dt. Zahl-/Datumsparser
+│   └── test_golden.py              # Eingefrorene Jahresbudgets (Golden-Werte)
 └── ui/
     ├── session.py                  # get_conn(), get_gmbh(), require_db(), get_budgetjahr()
     ├── assets/                     # goertz_logo.png, papperts_logo.png
@@ -52,16 +59,18 @@ revenue_planner/
         ├── 1_Startseite.py
         ├── 2_Filialen.py
         ├── 3_Daten_Import.py       # IST-Umsatz hochladen + Validierung + Sicherheitsabfrage
-        ├── 4_Parameter.py          # Planungsparameter (Wachstum, Ferien-Puffer, …)
+        ├── 4_Parameter.py          # Planungsparameter (Ferien-Puffer, …) — NICHT in Navigation (orphan);
+        │                           #   Wachstum-Editor entfernt → einzige Quelle: 11_Preisanpassung
         ├── 5_Neue_Filialen.py      # Neue Filialen anlegen
-        ├── 6_Planung.py            # Planung ausführen (inkl. ferien_kalender→ferien Sync!) + Excel-Export
+        ├── 6_Planung.py            # Planung ausführen + Excel-Export (kein ferien-Sync mehr)
         ├── 7_Planungsgenauigkeit.py# Plan vs. IST, Abweichung nur bis IST-Importstand
         ├── 8_Feiertage_Import.py   # Feiertage aller 16 Bundesländer + Fasching/Muttertag
         ├── 9_Oeffnungstage.py      # Wochentags- und Feiertags-Öffnung je Filiale
         ├── 10_Herleitung.py        # Additive Effektzerlegung / Wasserfall-Analyse
         ├── 11_Preisanpassung.py    # Monatliche Preisanpassung % je Planjahr
         ├── 12_Schulfilialen.py     # Auto-Erkennung + Matrix-Editor (nur ERKANNTE Filialen werden angezeigt)
-        └── 13_Datumsmapping.py     # Datumsmapping generieren + anzeigen
+        ├── 13_Datumsmapping.py     # Datumsmapping generieren + anzeigen
+        └── 14_Validierung.py       # Plausibilitätsprüfung (Ampel-Checks vor Planung)
 ```
 
 ---
@@ -76,8 +85,9 @@ revenue_planner/
 4. Öffnungstage prüfen (9_Oeffnungstage)  → filial_oeffnung, filial_feiertag
 5. Schulfilialen erkennen (12_Schulfil.)  → filial_schulferien
 6. Wachstum je Monat (11_Preisanpassung)  → parameter_monat
-7. Planung ausführen (6_Planung)          → SYNC ferien_kalender→ferien, dann Engine → planung
-8. Validierung: 10_Herleitung (Effekt-Wasserfall), 7_Planungsgenauigkeit (Plan vs. IST)
+7. Plausibilität prüfen (14_Validierung)  → Ampel-Checks (kein Schreiben)
+8. Planung ausführen (6_Planung)          → Engine (liest ferien_kalender direkt) → planung
+9. Validierung: 10_Herleitung (Effekt-Wasserfall), 7_Planungsgenauigkeit (Plan vs. IST)
 ```
 
 **Wichtig:** Ein IST-Import löst KEINE Neuberechnung der Planung aus und muss es
@@ -124,8 +134,9 @@ ferien_faktor    (fil_nr, bundesland, ferien_art, woche INT, faktor REAL)
 ### Schulferien
 ```sql
 ferien (id, bundesland, art, start_vj, ende_vj, start_plan, ende_plan)
-       -- ENGINE-Quelle! Wird in 6_Planung aus ferien_kalender synchronisiert
-ferien_kalender (bundesland, art, jahr, start, ende)  -- manuelle Eingabe (UI)
+       -- DEPRECATED (06/2026): Engine liest direkt aus ferien_kalender.
+       -- Tabelle bleibt nur wegen No-Drop-Regel im Schema (nicht mehr befüllen!)
+ferien_kalender (bundesland, art, jahr, start, ende)  -- EINZIGE Quelle der Wahrheit (UI + Engine)
 filial_schulferien (fil_nr, ferien_art, bundesland, geschlossen)  -- Schulfilialen-Matrix
 ```
 
@@ -252,12 +263,23 @@ Quellen: `sondertage` UND `feiertage WHERE LOWER(art)='sondertag'` (gemerged in
 `_load_reference_data`, feiertage-Einträge mit methode='referenz').
 Langfristig: Legacy-Tabelle abschaffen.
 
-### 6.3 ferien vs. ferien_kalender + Sync in 6_Planung
-`ferien_kalender` (UI-Eingabe) ≠ `ferien` (Engine-Quelle).
-`6_Planung._sync_ferien_kalender_to_ferien()` synchronisiert vor jedem
-PlanningEngine-Lauf: Planjahr-Perioden + zugehörige Vorjahres-Perioden (gematcht
-über bundesland+art). **Ohne Vorjahres-Eintrag in ferien_kalender wird die Periode
-übersprungen** → Ferien immer für Planjahr UND Vorjahr laden!
+### 6.3 ferien_kalender ist die einzige Ferien-Quelle (seit 06/2026)
+Die Engine leitet `self.ferien_plan` direkt aus `ferien_kalender` ab
+(Planjahr-Perioden + Vorjahres-Perioden, gematcht über bundesland+art) —
+der frühere Sync `ferien_kalender→ferien` in 6_Planung ist entfernt, die
+`ferien`-Tabelle ist deprecated. **Ohne Vorjahres-Eintrag in ferien_kalender
+wird die Periode weiterhin übersprungen** → Ferien immer für Planjahr UND
+Vorjahr laden! (Check 4 der Plausibilitätsprüfung warnt davor.)
+
+### 6.4 Importer-Datumsparser (Bug behoben 06/2026)
+Der dayfirst-Fallback in `importer.py` parste früher die bereits zu NaT
+coercte `datum`-Spalte (über `df.columns[0]`) statt der Originalstrings —
+deutsche `DD.MM.YYYY`-Zeilen wurden dadurch stillschweigend verworfen.
+Fix: Fallback parst die unveränderten Rohstrings (test_importer sichert das).
+
+### 6.5 liefer_plan
+`liefer_plan` in `planung` ist Dead Code (engine.save schreibt immer 0.0).
+Spalte bleibt wegen No-Drop-Regel — ignorieren, nicht neu verwenden.
 
 ---
 
@@ -270,7 +292,7 @@ Input & Stammdaten:
   Filialen → Umsatz-Import → Filial-Öffnungstage → Feiertage u. Ferien → Schulfilialen → Datumsmapping → Preisanpassung
 
 Berechnung & Validierung:
-  Planung ausführen → Herleitung → Planungsgenauigkeit
+  Plausibilitätsprüfung → Planung ausführen → Herleitung → Planungsgenauigkeit
 ```
 
 | Seite | Datei | Funktion |
@@ -283,7 +305,8 @@ Berechnung & Validierung:
 | Schulfilialen | 12_Schulfilialen.py | ≥80% Nullumsatz = Schulfiliale, Matrix-Editor, nur erkannte Filialen |
 | Datumsmapping | 13_Datumsmapping.py | Mapping Budgettag→Basistag generieren + prüfen |
 | Preisanpassung | 11_Preisanpassung.py | Wachstum % je Monat + Planjahr |
-| Planung ausführen | 6_Planung.py | ferien_kalender→ferien-Sync, Berechnung, Bestätigungsdialog, Excel-Export |
+| Plausibilitätsprüfung | 14_Validierung.py | 8 Ampel-Checks vor der Planung (BL, IST-Basis, Ferien-VJ, datum_vj, IST-Lücken, parameter_monat) |
+| Planung ausführen | 6_Planung.py | Berechnung, Bestätigungsdialog, Excel-Export |
 | Herleitung | 10_Herleitung.py | Additive Effekte, Zeilenauswahl-Detailpanel |
 | Planungsgenauigkeit | 7_Planungsgenauigkeit.py | Plan vs. IST, Abweichung nur bis IST-Importstand |
 
@@ -403,6 +426,17 @@ CSS in `app.py` zeigt spinning 🥨 Brezel + "Loading..." Text:
 
 Aus Sicht Senior Controlling / Beratung. Priorisiert:
 
+### 12.0 Test-Suite (Sicherheitsnetz)
+`python -m pytest revenue_planner/tests/` — 14 Tests, alle müssen grün sein:
+- **Additive Identität** je Tag (< 0,05 €), Monatsnormierung (Σ Tage == monat_plan),
+  geschlossene Tage budget==0, 365 Tage/Filiale, `_normalize_bl`, Ferieneffekt greift.
+- **Importer:** dt. Zahlformat ("3.000"→3000, "1.234,56"→1234.56), Datum DD.MM.YYYY/ISO.
+- **Golden-Test** (`test_golden.py`): eingefrorene Jahresbudgets je Test-Filiale;
+  Abweichung > 0,5 € = Verhaltensänderung der Engine → erst Ursache klären,
+  Golden-Werte nur bei BEWUSSTER Logikänderung anpassen.
+Fixture: `tests/conftest.py` (`make_test_db`/`make_engine`), deterministische
+3-Filialen-DB inkl. Ferien-Dip (−40 % Osterferien BW 2025), Planjahr 2026.
+
 ### 12.1 Behoben
 - ✅ Deutsche Zahlformate beim Import (3.000 ≠ 3,0)
 - ✅ Sicherheitsabfrage vor Neuimport
@@ -412,29 +446,31 @@ Aus Sicht Senior Controlling / Beratung. Priorisiert:
 - ✅ Planungsgenauigkeit: Abweichung nur bis IST-Importstand
 - ✅ feiertag_name bei geschlossenen Feiertagen in der Herleitung sichtbar
 - ✅ Datumsmapping (wochentagsbasiertes Basis-Referenz-Matching) implementiert
+- ✅ Regressionstest-Suite (pytest, 14 Tests inkl. Golden-Run) — Abschnitt 12.0
+- ✅ Importer-Datumsbug: DD.MM.YYYY-Zeilen wurden stillschweigend verworfen (s. 6.4)
+- ✅ Wachstums-Redundanz: Wachstum-Editor aus 4_Parameter entfernt, einzige Quelle 11_Preisanpassung
+- ✅ Budgetjahr wird bei Firmenwechsel zurückgesetzt (session.open_db)
+- ✅ ferien/ferien_kalender-Dualität: Engine liest direkt aus ferien_kalender, Sync entfernt
+- ✅ Engine modularisiert: plan_branch als Pipeline (_day_status/_day_raw/_normalize_month/_build_dayplan)
+- ✅ Plausibilitätsprüfungs-Seite (14_Validierung) mit Gesamtampel
 
 ### 12.2 Offen — hohe Priorität
 | # | Thema | Risiko/Nutzen |
 |---|-------|---------------|
-| 1 | **Regressionstest-Suite** (pytest): additive Identität je Tag, Monatsnormierung (Σ Tage == monat_plan), BL-Normalisierung, Importer-Zahlparser. Aktuell gibt es KEINE Tests. | Höchstes Risiko: stille Rechenfehler im Budget |
-| 2 | **Datenmodell konsolidieren**: `sondertage`-Legacy-Tabelle und `ferien`/`ferien_kalender`-Dualität abbauen (eine Quelle der Wahrheit, Engine liest direkt). Sync-Schritte sind Fehlerquellen. | Mittelfristig Pflicht |
+| 2 | **Sondertage-Legacy** abbauen: `sondertage`-Tabelle abschaffen, nur noch `feiertage` mit art='Sondertag' (Ferien-Dualität ist erledigt). | Mittelfristig |
 | 3 | **BL-Normalisierung an der Quelle**: beim Anlegen/Editieren von Filialen normalisieren statt (nur) in der Engine. | Konsistenz |
 | 4 | **Engine-Performance**: `_ist_on()` filtert pro Tag das gesamte IST-DataFrame (O(Tage×Zeilen)). Bei 255 Filialen × 365 Tagen langsam. Lösung: Lookup-Dict `{(fil_nr, iso): umsatz}` einmalig bauen. | Laufzeit |
-| 5 | **Validierungs-/Plausibilitätsseite**: automatische Checks vor Planung (Filialen ohne BL, Ferien ohne VJ-Periode, Feiertage ohne datum_vj, Monate ohne Basisumsatz, IST-Lücken im Basisfenster) mit Ampel-Anzeige. | Fehlerprävention |
-| 5a | **Wachstums-Redundanz**: 4_Parameter (Tab "Wachstum") UND 11_Preisanpassung schreiben beide in `parameter_monat.wachstum_pct` — zwei Seiten, gleiche Daten, Überschreibungsrisiko bei parallelem Edit. Eine Seite entfernen oder klar trennen. | Datenintegrität |
-| 5b | **Budgetjahr-Session-Handling** (session.py): `get_budgetjahr()` Default = heute+1, kein Fallback auf DB; bei Firmenwechsel (`open_db`) wird das Budgetjahr NICHT zurückgesetzt — Restwert der vorherigen Firma bleibt aktiv. | Falsche Jahresbasis möglich |
 
 ### 12.3 Offen — mittlere Priorität
 | # | Thema |
 |---|-------|
-| 6 | Effekt-Berechnung modularisieren: jeder Effekt (Öffnung, Verteilung, Wochentag, Preis, Ferien, Feiertag) als eigene, unabhängig testbare Funktion/Modul mit einheitlicher Signatur, damit neue Rechenschritte die bestehenden nicht verändern (Pipeline-Muster). `plan_branch()` ist aktuell ein Monolith. |
 | 7 | Feiertagsreferenz-Algorithmus: Vergleich mit umliegenden Sonntagen (nicht gleiche Woche, nicht in Ferien, mit Umsatz) statt einfachem datum_vj |
 | 8 | Ramadan-/Fasching-Effekt: Parameter (`apply_ramadan`, `apply_fasching`, `fasching_wirkung_pct`) vorhanden, Berechnung fehlt |
 | 9 | Tooltip Herleitung: verwendete Vergleichstage bei Feiertagseffekten anzeigen. Streamlit unterstützt keine Hover-Tooltips auf Zellen — Spalten-Header haben `help=`, Zeilenklick öffnet Detail-Panel; echte Zellen-Tooltips bräuchten Ag-Grid/Custom Component. |
 | 10 | `ensure_filialen_from_ist` nutzt Default "DE-RP" (Alt-Format) — auf "RP" umstellen |
 | 11 | Schulferien Auto-Load (holidays-Lib kann SCHOOL für DE nicht) — externe Quelle/API prüfen |
 | 12 | Warengruppen-Budget: bewusst Out of Scope. |
-| 13 | `liefer_plan` ist Dead Code (immer 0.0, engine.py save) — Spalte/Feld bei nächster Aufräumrunde entfernen bzw. ignorieren dokumentieren. |
+| 13 | `liefer_plan` ist Dead Code (immer 0.0, engine.py save) — als deprecated dokumentiert (6.5), Spalte bleibt (No-Drop-Regel). |
 | 14 | `_ferien_cache` wird je `plan_branch()`-Aufruf neu initialisiert statt auf Engine-Ebene — funktional korrekt, aber Faktoren werden je Filiale neu gerechnet (Performance). |
 
 ### 12.4 Architektur-Leitplanken (bei jeder Änderung beachten)
@@ -474,6 +510,12 @@ Aus Sicht Senior Controlling / Beratung. Priorisiert:
 
 | Git-Hash | Beschreibung |
 |----------|-------------|
+| `39fc92b` | Plausibilitätsprüfungs-Seite (14_Validierung) mit Ampel-Checks |
+| `d5971f9` | Engine: plan_branch in Pipeline-Methoden modularisiert (Golden-Test unverändert) |
+| `10cc2fe` | Engine liest Ferien direkt aus ferien_kalender, Sync entfernt, ferien deprecated |
+| `457ddb7` | Budgetjahr-Reset bei Firmenwechsel (session.open_db) |
+| `fc5d42d` | Doppelter Wachstum-Editor aus 4_Parameter entfernt (Quelle: 11_Preisanpassung) |
+| `3bef718` | Regressionstest-Suite (Identität, Normierung, Parser, Golden) + Importer-Datumsbug-Fix |
 | `0cb9ca8` | Logo margin-top, Budgetjahr-Dropdown immer-anlegen, Datumsmapping Feiertagstage/Ferien-Beschreibungen |
 | `f8b1118` | German UI-Polish: Auto-Save Öffnungstage, Budgetjahr-Dropdown, Logo-Margin, Datumsmapping-Redesign |
 | `071ae5d` | Bugfix: ISO-String-Variable im plan_branch-Inner-Loop korrigiert (zeigte auf letzten Monatstag) |
