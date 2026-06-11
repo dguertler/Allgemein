@@ -39,7 +39,6 @@ if get_gmbh():
     st.success(f"Aktive Firma: **{get_gmbh()}**")
     conn = get_conn()
 
-    # ── Budgetjahr per Dropdown ────────────────────────────────────────────
     st.subheader("Budgetjahr")
 
     years_in_db: list[int] = [
@@ -48,11 +47,14 @@ if get_gmbh():
         ).fetchall()
     ]
 
-    current_bj = get_budgetjahr()
-
     if years_in_db:
-        # Sicherstellen, dass das aktive Budgetjahr in der Liste ist
-        opts = years_in_db if current_bj in years_in_db else [current_bj] + years_in_db
+        current_bj = get_budgetjahr()
+        # Sicherstellen, dass das aktive Jahr in der Liste ist (kann abweichen nach DB-Wechsel)
+        opts = sorted(set(years_in_db), reverse=True)
+        if current_bj not in opts:
+            # Automatisch auf das neueste Jahr umstellen
+            set_budgetjahr(opts[0])
+            current_bj = opts[0]
         sel = st.selectbox(
             "Budgetjahr auswählen",
             options=opts,
@@ -69,7 +71,7 @@ if get_gmbh():
     else:
         st.warning("Noch kein Budgetjahr angelegt. Bitte unten ein Budgetjahr erstellen.")
 
-    # ── Neues Budgetjahr anlegen ───────────────────────────────────────────
+    # ── Neues Budgetjahr anlegen — immer sichtbar ──────────────────────────
     with st.expander("➕ Neues Budgetjahr anlegen", expanded=not bool(years_in_db)):
         new_year = st.number_input(
             "Jahr", min_value=2024, max_value=2040,

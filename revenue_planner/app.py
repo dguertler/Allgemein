@@ -69,12 +69,13 @@ if _logo_bytes:
     st.logo(_logo_bytes, size="large")
     st.markdown("""
 <style>
-/* Logo-Bereich: gleiches Padding links wie oben */
+/* Logo-Bereich: margin-top auf dem Header selbst (padding-top wird von Streamlit überschrieben) */
 [data-testid="stSidebarHeader"] {
-    padding-top: 1rem !important;
+    margin-top: 1rem !important;
     padding-left: 1rem !important;
     padding-right: 1rem !important;
     padding-bottom: 0.5rem !important;
+    padding-top: 0 !important;
 }
 [data-testid="stSidebarHeader"] img {
     height: 80px !important;
@@ -84,7 +85,8 @@ if _logo_bytes:
     padding: 4px 6px !important;
     border-radius: 5px !important;
     object-fit: contain !important;
-    margin-left: 0 !important;
+    display: block !important;
+    margin: 0 !important;
 }
 /* Sidebar-Einklapp-Button ausblenden */
 [data-testid="stSidebarCollapseButton"],

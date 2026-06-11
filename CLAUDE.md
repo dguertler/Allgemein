@@ -395,6 +395,7 @@ holidays-Lib unterstützt SCHOOL für DE nicht. Nur manuelle Eingabe.
 
 | Git-Hash | Beschreibung |
 |----------|-------------|
+| `f8b1118` | German UI-Polish: Auto-Save Öffnungstage, Budgetjahr-Dropdown, Logo-Margin, Datumsmapping-Redesign |
 | `071ae5d` | Bugfix: ISO-String-Variable im plan_branch-Inner-Loop korrigiert (zeigte auf letzten Monatstag) |
 | `84d0ebe` | Datumsmapping implementiert (wochentagsbasiertes Basis-Referenz-Matching), Logo-Größe verdoppelt |
 | `5588984` | Navigation: Öffnungstage nach Umsatz-Import, Feiertage+Schulfilialen zusammen |

@@ -2,9 +2,13 @@
 
 For each day in the plan year × each bundesland from filialen, determines
 the correct reference day in the rolling base year using:
-  1. Feiertag → Feiertag matching via datum_vj
-  2. Ferien week N → same week N in VJ period (weekday-matched)
-  3. Normal → same ISO-KW + weekday in base year
+  1. Feiertag (art='feiertag') → same-named holiday in base year via datum_vj
+  2. Feiertagstag (art='feiertagstag') → ISO-KW mapping (treated as normal by engine)
+  3. Sondertag → datum_referenz from sondertage table
+  4. Ferien week N → same week N in VJ period (weekday-matched)
+  5. Normal → same ISO-KW + weekday in base year
+
+Description priority (combined): Feiertag > Feiertagstag > Sondertag > Ferien
 """
 from __future__ import annotations
 
@@ -34,7 +38,6 @@ def _date_from_iso_week(year: int, week: int, weekday: int) -> date:
     jan4 = date(year, 1, 4)
     week1_monday = jan4 - timedelta(days=jan4.weekday())
     result = week1_monday + timedelta(weeks=week - 1, days=weekday)
-    # If result lands in the wrong ISO year, use week 52 instead
     if result.isocalendar()[0] != year:
         result = week1_monday + timedelta(weeks=51, days=weekday)
     return result
@@ -44,7 +47,7 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
     """Generate and persist datumsmapping for planjahr. Returns row count."""
     py = planjahr
 
-    # Distinct bundesländer actually in use (format from filialen: DE-RP etc.)
+    # Distinct bundesländer from filialen
     bl_rows = conn.execute(
         "SELECT DISTINCT bundesland FROM filialen WHERE bundesland IS NOT NULL AND bundesland != ''"
     ).fetchall()
@@ -65,56 +68,92 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
             iso_week = plan_d.isocalendar()[1]
 
             for bl in bundeslaender:
-                # 1. Feiertag matching
+                bezeichnung_parts: list[str] = []
+                base_bezeichnung_parts: list[str] = []
+                plan_typ = "normal"
+                mapping_art = "iso_kw"
+                base_d: date | None = None
+
+                # 1. Feiertag (art='feiertag')
                 ft = engine._relevant_feiertag(iso, bl)
                 if ft:
+                    plan_typ = "feiertag"
+                    mapping_art = "feiertag"
+                    bezeichnung_parts.append(ft["name"])
+                    base_bezeichnung_parts.append(ft["name"])
                     base_d = engine._feiertag_base_date(ft, month)
                     if base_d is None:
                         base_d = _safe_date(by, month, day) or plan_d
-                    rows.append((
-                        iso, base_d.isoformat(),
-                        "feiertag", "feiertag", bl, "feiertag", ft["name"]
-                    ))
-                    continue
 
-                # 2. Ferien matching
+                # 2. Feiertagstag (art='feiertagstag') — nur wenn kein echter Feiertag
+                if plan_typ == "normal":
+                    ft_tag = None
+                    for entry in engine.feiertage.get(iso, []):
+                        if entry["bundesland"] in ("alle", bl) and entry.get("art") == "feiertagstag":
+                            ft_tag = entry
+                            break
+                    if ft_tag:
+                        plan_typ = "feiertagstag"
+                        bezeichnung_parts.append(ft_tag["name"])
+                        # Feiertagstage werden wie normale Tage behandelt → ISO-KW Basis
+
+                # 3. Sondertag — fügt Bezeichnung hinzu, überschreibt Basis wenn noch kein Typ
+                st_entry = engine._relevant_sondertag(iso, bl)
+                if st_entry:
+                    bezeichnung_parts.append(st_entry["bezeichnung"])
+                    if plan_typ == "normal":
+                        plan_typ = "sondertag"
+                        mapping_art = "sondertag"
+                        if st_entry.get("datum_referenz"):
+                            try:
+                                base_d = date.fromisoformat(st_entry["datum_referenz"])
+                            except ValueError:
+                                pass
+
+                # 4. Ferien — fügt Bezeichnung hinzu, überschreibt Basis wenn noch kein Typ
                 fer = engine._ferien_info_for_day(iso, bl)
                 if fer:
                     art, woche = fer
-                    period = next(
-                        (f for f in engine.ferien_plan
-                         if f["bundesland"] == bl and f["art"] == art),
-                        None
-                    )
-                    if period:
-                        vj_start = date.fromisoformat(period["start_vj"])
-                        vj_ende = date.fromisoformat(period["ende_vj"])
-                        wk_start = vj_start + timedelta(weeks=woche - 1)
-                        delta = wt - wk_start.weekday()
-                        base_d = wk_start + timedelta(days=delta)
-                        base_d = max(vj_start, min(base_d, vj_ende))
-                        rows.append((
-                            iso, base_d.isoformat(),
-                            "ferien", "ferien", bl, "ferien", art
-                        ))
-                        continue
+                    bezeichnung_parts.append(art)
+                    if plan_typ == "normal":
+                        plan_typ = "ferien"
+                        mapping_art = "ferien"
+                        period = next(
+                            (f for f in engine.ferien_plan
+                             if f["bundesland"] == bl and f["art"] == art),
+                            None
+                        )
+                        if period:
+                            vj_start = date.fromisoformat(period["start_vj"])
+                            vj_ende = date.fromisoformat(period["ende_vj"])
+                            wk_start = vj_start + timedelta(weeks=woche - 1)
+                            delta = wt - wk_start.weekday()
+                            base_d = wk_start + timedelta(days=delta)
+                            base_d = max(vj_start, min(base_d, vj_ende))
+                            base_bezeichnung_parts.append(art)
 
-                # 3. Normal: same ISO-KW + weekday in base year
-                base_d = _date_from_iso_week(by, iso_week, wt)
+                # 5. Fallback: ISO-KW
+                if base_d is None:
+                    base_d = _date_from_iso_week(by, iso_week, wt)
+
+                bezeichnung = ", ".join(bezeichnung_parts)
+                base_bezeichnung = ", ".join(base_bezeichnung_parts)
+
                 rows.append((
                     iso, base_d.isoformat(),
-                    "normal", "normal", bl, "iso_kw", ""
+                    plan_typ, plan_typ, bl, mapping_art,
+                    bezeichnung, base_bezeichnung,
                 ))
 
-    # Repopulate
     conn.execute(
         "DELETE FROM datumsmapping WHERE CAST(strftime('%Y', plan_datum) AS INTEGER) = ?",
         (py,)
     )
     conn.executemany(
         """INSERT OR REPLACE INTO datumsmapping
-           (plan_datum, base_datum, plan_typ, base_typ, bundesland, mapping_art, bezeichnung)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+           (plan_datum, base_datum, plan_typ, base_typ, bundesland, mapping_art,
+            bezeichnung, base_bezeichnung)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         rows,
     )
     conn.commit()
