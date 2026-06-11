@@ -1,39 +1,33 @@
-"""Feiertage & Sondertage laden — bulk load for years 2023-2036."""
+"""Feiertage und Ferien laden — für Basiszeitraum + Budgetjahr."""
 import streamlit as st
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from ui.session import get_conn, get_gmbh, require_db
+from ui.session import get_conn, get_gmbh, require_db, get_budgetjahr
 from datetime import date, timedelta
 import pandas as pd
 
 require_db()
 conn = get_conn()
-st.title("Feiertage & Sondertage laden")
-st.caption(f"Firma: **{get_gmbh()}**")
+planjahr = get_budgetjahr()
+vj = planjahr - 1
+
+st.title("Feiertage und Ferien laden")
+st.caption(f"Firma: **{get_gmbh()}** · Budgetjahr: **{planjahr}** · Vorjahr (Basis): **{vj}**")
 
 BUNDESLAENDER = ["BB", "BE", "BW", "BY", "HB", "HE", "HH", "MV",
                  "NI", "NW", "RP", "SH", "SL", "SN", "ST", "TH"]
 
 RAMADAN = {
-    2023: ("2023-03-23", "2023-04-21"),
-    2024: ("2024-03-11", "2024-04-09"),
-    2025: ("2025-03-01", "2025-03-30"),
-    2026: ("2026-02-18", "2026-03-19"),
-    2027: ("2027-02-07", "2027-03-08"),
-    2028: ("2028-01-27", "2028-02-25"),
-    2029: ("2029-01-15", "2029-02-13"),
-    2030: ("2030-01-04", "2030-02-02"),
-    2031: ("2030-12-25", "2031-01-23"),
-    2032: ("2031-12-14", "2032-01-12"),
-    2033: ("2032-12-02", "2033-01-01"),
-    2034: ("2033-11-21", "2033-12-20"),
-    2035: ("2034-11-11", "2034-12-10"),
-    2036: ("2035-11-01", "2035-11-30"),
+    2023: ("2023-03-23", "2023-04-21"), 2024: ("2024-03-11", "2024-04-09"),
+    2025: ("2025-03-01", "2025-03-30"), 2026: ("2026-02-18", "2026-03-19"),
+    2027: ("2027-02-07", "2027-03-08"), 2028: ("2028-01-27", "2028-02-25"),
+    2029: ("2029-01-15", "2029-02-13"), 2030: ("2030-01-04", "2030-02-02"),
+    2031: ("2030-12-25", "2031-01-23"), 2032: ("2031-12-14", "2032-01-12"),
+    2033: ("2032-12-02", "2033-01-01"), 2034: ("2033-11-21", "2033-12-20"),
+    2035: ("2034-11-11", "2034-12-10"), 2036: ("2035-11-01", "2035-11-30"),
 }
-
-LOAD_YEARS = list(range(2023, 2037))
 
 
 def _easter(year: int) -> date:
@@ -59,23 +53,20 @@ def _muttertag(year: int) -> date:
     return sundays[1]
 
 
-def _load_public_holidays_year(planjahr: int) -> list:
+def _load_public_holidays_year(plan_yr: int) -> list:
     import holidays as hol_lib
-    vj = planjahr - 1
-    plan_by_state: dict = {}
-    vj_by_state: dict = {}
+    base_yr = plan_yr - 1
+    plan_by_state, vj_by_state = {}, {}
     for bl in BUNDESLAENDER:
-        h_plan = hol_lib.country_holidays("DE", subdiv=bl, years=planjahr)
-        h_vj = hol_lib.country_holidays("DE", subdiv=bl, years=vj)
-        plan_by_state[bl] = {d2.isoformat(): n for d2, n in h_plan.items()}
-        vj_by_state[bl] = {d2.isoformat(): n for d2, n in h_vj.items()}
+        plan_by_state[bl] = {d2.isoformat(): n for d2, n in
+                             hol_lib.country_holidays("DE", subdiv=bl, years=plan_yr).items()}
+        vj_by_state[bl]   = {d2.isoformat(): n for d2, n in
+                             hol_lib.country_holidays("DE", subdiv=bl, years=base_yr).items()}
 
     date_info: dict = {}
     for bl, hdict in plan_by_state.items():
         for iso, name in hdict.items():
-            if iso not in date_info:
-                date_info[iso] = {"name": name, "states": set()}
-            date_info[iso]["states"].add(bl)
+            date_info.setdefault(iso, {"name": name, "states": set()})["states"].add(bl)
 
     vj_lookup: dict = {}
     for bl, hdict in vj_by_state.items():
@@ -84,8 +75,7 @@ def _load_public_holidays_year(planjahr: int) -> list:
 
     result = []
     for iso, info in sorted(date_info.items()):
-        name = info["name"]
-        states = info["states"]
+        name, states = info["name"], info["states"]
         if len(states) == len(BUNDESLAENDER):
             vj_date = next((vj_lookup.get(name, {}).get(bl) for bl in BUNDESLAENDER
                             if vj_lookup.get(name, {}).get(bl)), None)
@@ -100,12 +90,6 @@ def _load_public_holidays_year(planjahr: int) -> list:
 
 
 def _feiertagstage_rows(holiday_rows: list) -> list:
-    """Generate Feiertagstage (day before/after) for each public holiday.
-
-    - Sunday holiday: no Feiertagstage
-    - Monday holiday: Saturday(-2), Sunday(-1), Tuesday(+1)
-    - Other days: day before(-1), day after(+1)
-    """
     result = []
     for row in holiday_rows:
         if row.get("art") != "feiertag":
@@ -114,355 +98,310 @@ def _feiertagstage_rows(holiday_rows: list) -> list:
             plan_d = date.fromisoformat(row["datum_plan"])
         except (ValueError, TypeError):
             continue
-
-        wd = plan_d.weekday()  # 0=Mon, 6=Sun
+        wd = plan_d.weekday()
         if wd == 6:
             continue
-        elif wd == 0:
-            offsets = [-2, -1, 1]  # Sat, Sun, Tue
-        else:
-            offsets = [-1, 1]
-
+        offsets = [-2, -1, 1] if wd == 0 else [-1, 1]
         vj_d = None
         if row.get("datum_vj"):
             try:
                 vj_d = date.fromisoformat(row["datum_vj"])
             except (ValueError, TypeError):
                 vj_d = None
-
         for offset in offsets:
             new_plan = plan_d + timedelta(days=offset)
             new_vj = (vj_d + timedelta(days=offset)).isoformat() if vj_d else None
-            label = "Vortag" if offset < 0 else "Nachtag"
             result.append({
-                "datum_plan": new_plan.isoformat(),
-                "datum_vj": new_vj,
-                "name": f"{row['name']} ({label})",
-                "bundesland": row["bundesland"],
-                "art": "feiertagstag",
+                "datum_plan": new_plan.isoformat(), "datum_vj": new_vj,
+                "name": "Feiertagstag", "bundesland": row["bundesland"], "art": "feiertagstag",
             })
     return result
 
 
-def _sondertage_rows_year(planjahr: int, with_muttertag: bool,
-                          with_fasching: bool, with_ramadan: bool) -> list:
+def _sondertage_rows(plan_yr: int, with_muttertag, with_fasching, with_ramadan) -> list:
     rows = []
-    vj = planjahr - 1
-
+    base_yr = plan_yr - 1
     if with_muttertag:
-        mt_plan = _muttertag(planjahr)
-        mt_vj = _muttertag(vj)
-        rows.append({
-            "datum_plan": mt_plan.isoformat(),
-            "datum_referenz": mt_vj.isoformat(),
-            "bezeichnung": "Muttertag",
-            "methode": "referenz",
-            "bundesland": "alle",
-        })
-
+        rows.append({"datum_plan": _muttertag(plan_yr).isoformat(),
+                     "datum_referenz": _muttertag(base_yr).isoformat(),
+                     "bezeichnung": "Muttertag", "methode": "referenz", "bundesland": "alle"})
     if with_fasching:
-        ostern_plan = _easter(planjahr)
-        ostern_vj = _easter(vj)
-        fasching_days = [
-            ("Weiberfastnacht", 52),
-            ("Rosen-Freitag", 51),
-            ("Faschings-Samstag", 50),
-            ("Faschings-Sonntag", 49),
-            ("Rosenmontag", 48),
-            ("Fastnachtsdienstag", 47),
-        ]
-        for name, offset in fasching_days:
-            rows.append({
-                "datum_plan": (ostern_plan - timedelta(days=offset)).isoformat(),
-                "datum_referenz": (ostern_vj - timedelta(days=offset)).isoformat(),
-                "bezeichnung": name,
-                "methode": "referenz",
-                "bundesland": "alle",
-            })
-
-    if with_ramadan and planjahr in RAMADAN:
-        start_iso, ende_iso = RAMADAN[planjahr]
-        prev_ramadan = RAMADAN.get(planjahr - 1)
-        ref_iso = prev_ramadan[0] if prev_ramadan else None
-        rows.append({
-            "datum_plan": start_iso,
-            "datum_referenz": ref_iso,
-            "bezeichnung": "Ramadan (ca.) Start",
-            "methode": "referenz",
-            "bundesland": "alle",
-        })
-        rows.append({
-            "datum_plan": ende_iso,
-            "datum_referenz": None,
-            "bezeichnung": "Ramadan (ca.) Ende",
-            "methode": "referenz",
-            "bundesland": "alle",
-        })
+        ostern_p = _easter(plan_yr)
+        ostern_v = _easter(base_yr)
+        for name, offset in [("Weiberfastnacht", 52), ("Rosen-Freitag", 51),
+                              ("Faschings-Samstag", 50), ("Faschings-Sonntag", 49),
+                              ("Rosenmontag", 48), ("Fastnachtsdienstag", 47)]:
+            rows.append({"datum_plan": (ostern_p - timedelta(days=offset)).isoformat(),
+                         "datum_referenz": (ostern_v - timedelta(days=offset)).isoformat(),
+                         "bezeichnung": name, "methode": "referenz", "bundesland": "alle"})
+    if with_ramadan and plan_yr in RAMADAN:
+        s, e = RAMADAN[plan_yr]
+        prev = RAMADAN.get(plan_yr - 1)
+        rows.append({"datum_plan": s, "datum_referenz": prev[0] if prev else None,
+                     "bezeichnung": "Ramadan (ca.) Start", "methode": "referenz", "bundesland": "alle"})
+        rows.append({"datum_plan": e, "datum_referenz": None,
+                     "bezeichnung": "Ramadan (ca.) Ende", "methode": "referenz", "bundesland": "alle"})
     return rows
 
 
-def _load_all_years(years, with_feiertagstage, with_muttertag,
-                    with_fasching, with_ramadan, replace_existing, conn_db) -> dict:
-    all_ft = []
-    all_st = []
-    for yr in years:
-        ft_rows = _load_public_holidays_year(yr)
-        all_ft.extend(ft_rows)
-        if with_feiertagstage:
-            all_ft.extend(_feiertagstage_rows(ft_rows))
-        all_st.extend(_sondertage_rows_year(yr, with_muttertag, with_fasching, with_ramadan))
-
-    if replace_existing:
-        for yr in years:
-            conn_db.execute("DELETE FROM feiertage WHERE datum_plan LIKE ?", (f"{yr}-%",))
-            conn_db.execute("DELETE FROM sondertage WHERE datum_plan LIKE ?", (f"{yr}-%",))
-        if with_ramadan:
-            for yr in years:
-                if yr in RAMADAN:
-                    start_yr = RAMADAN[yr][0][:4]
-                    if start_yr != str(yr):
-                        conn_db.execute("DELETE FROM sondertage WHERE datum_plan LIKE ?",
-                                       (f"{start_yr}-%",))
-
-    for row in all_ft:
-        conn_db.execute("""
-            INSERT OR IGNORE INTO feiertage (datum_plan, datum_vj, name, bundesland, art)
-            VALUES (:datum_plan, :datum_vj, :name, :bundesland, :art)
-        """, row)
-    for row in all_st:
-        conn_db.execute("""
-            INSERT OR IGNORE INTO sondertage (datum_plan, datum_referenz, bezeichnung, methode, bundesland)
-            VALUES (:datum_plan, :datum_referenz, :bezeichnung, :methode, :bundesland)
-        """, row)
+def _rebuild_ferien_from_kalender(conn_db, plan_yr: int):
+    """Rebuild ferien table for plan_yr using ferien_kalender pairs (VJ + plan year)."""
+    base_yr = plan_yr - 1
+    vj_map = {(r["bundesland"], r["art"]): (r["start"], r["ende"])
+              for r in conn_db.execute(
+                  "SELECT bundesland, art, start, ende FROM ferien_kalender WHERE jahr=?",
+                  (base_yr,)).fetchall()}
+    plan_entries = conn_db.execute(
+        "SELECT bundesland, art, start, ende FROM ferien_kalender WHERE jahr=?",
+        (plan_yr,)
+    ).fetchall()
+    conn_db.execute(
+        "DELETE FROM ferien WHERE CAST(strftime('%Y', start_plan) AS INTEGER)=?", (plan_yr,)
+    )
+    for r in plan_entries:
+        bl, art = r["bundesland"], r["art"]
+        vj_dates = vj_map.get((bl, art))
+        if not vj_dates:
+            continue
+        conn_db.execute(
+            "INSERT INTO ferien (bundesland, art, start_vj, ende_vj, start_plan, ende_plan) "
+            "VALUES (?,?,?,?,?,?)",
+            (bl, art, vj_dates[0], vj_dates[1], r["start"], r["ende"])
+        )
     conn_db.commit()
-    return {"feiertage": len(all_ft), "sondertage": len(all_st)}
 
 
-# ── Section 1: Auto-Load ────────────────────────────────────────────────────────────
-st.subheader("1. Automatisch laden")
+def _auto_datumsmapping(conn_db, plan_yr: int) -> str:
+    try:
+        from planning.engine import PlanningEngine, PlanParams
+        from planning.datumsmapping import generate_datumsmapping
+        par_row = conn_db.execute(
+            "SELECT * FROM parameter WHERE planjahr=?", (plan_yr,)
+        ).fetchone()
+        params = PlanParams(
+            planjahr=plan_yr,
+            preiserhoehung_pct=float(par_row["preiserhoehung_pct"] or 0) if par_row else 0,
+            ferien_puffer_wochen=int(par_row["ferien_puffer_wochen"] or 2) if par_row else 2,
+        )
+        engine = PlanningEngine(conn_db, params)
+        n = generate_datumsmapping(conn_db, plan_yr, engine)
+        return f"Datumsmapping: {n:,} Zeilen aktualisiert."
+    except Exception as ex:
+        return f"Datumsmapping-Fehler: {ex}"
 
-col_opt1, col_opt2 = st.columns([2, 2])
+
+# ── Abschnitt 1: Laden ───────────────────────────────────────────────────────
+st.subheader("1. Feiertage, Sondertage und Ferien laden")
+st.caption(f"Lädt Daten für Budgetjahr **{planjahr}** und Basisjahr **{vj}**.")
+
+col_opt1, col_opt2 = st.columns(2)
 with col_opt1:
-    with_feiertagstage = st.checkbox("Feiertagstage (Vor-/Nachtage) laden", value=True,
-        help="Für jeden Feiertag werden der Vor- und Nachtag als 'feiertagstag' markiert.")
-    with_muttertag = st.checkbox("Muttertag als Sondertag", value=True)
-    with_fasching = st.checkbox("Fasching (Do–Di) als Sondertage", value=True,
-        help="Lädt alle 6 Fasching-Tage von Weiberfastnacht bis Fastnachtsdienstag.")
+    with_feiertagstage = st.checkbox("Feiertagstage (Vor-/Nachtage) laden", value=True)
+    with_muttertag     = st.checkbox("Muttertag als Sondertag", value=True)
+    with_fasching      = st.checkbox("Fasching (Do–Di) als Sondertage", value=True)
 with col_opt2:
-    with_ramadan = st.checkbox("Ramadan (ca.) als Sondertage", value=False,
-        help="Ungenähre Ramadan-Daten (ca.) für 2023–2036. "
-             "Nur aktivieren wenn Ramadan-Filialen betroffen sind.")
-    replace_existing = st.checkbox("Bestehende Einträge ersetzen", value=True)
+    with_ramadan       = st.checkbox("Ramadan (ca.) als Sondertage", value=False)
+    replace_existing   = st.checkbox("Bestehende Einträge ersetzen", value=True)
 
-st.caption(f"Jahre: {LOAD_YEARS[0]} – {LOAD_YEARS[-1]} ({len(LOAD_YEARS)} Jahre)")
-
-if st.button("\U0001f504 Alle Jahre laden (2023–2036)", type="primary"):
-    with st.spinner("Lade Feiertage für alle Jahre ..."):
+if st.button("🔄 Feiertage, Sondertage und Ferien laden", type="primary"):
+    with st.spinner("Lade …"):
         try:
-            counts = _load_all_years(
-                LOAD_YEARS, with_feiertagstage, with_muttertag,
-                with_fasching, with_ramadan, replace_existing, conn
-            )
+            load_years = [vj, planjahr]
+            all_ft, all_st = [], []
+            for yr in load_years:
+                ft_rows = _load_public_holidays_year(yr)
+                all_ft.extend(ft_rows)
+                if with_feiertagstage:
+                    all_ft.extend(_feiertagstage_rows(ft_rows))
+                all_st.extend(_sondertage_rows(yr, with_muttertag, with_fasching, with_ramadan))
+
+            if replace_existing:
+                for yr in load_years:
+                    conn.execute("DELETE FROM feiertage WHERE datum_plan LIKE ?", (f"{yr}-%",))
+                    conn.execute("DELETE FROM sondertage WHERE datum_plan LIKE ?", (f"{yr}-%",))
+
+            for row in all_ft:
+                conn.execute(
+                    "INSERT OR IGNORE INTO feiertage (datum_plan, datum_vj, name, bundesland, art) "
+                    "VALUES (:datum_plan, :datum_vj, :name, :bundesland, :art)", row)
+            for row in all_st:
+                conn.execute(
+                    "INSERT OR IGNORE INTO sondertage "
+                    "(datum_plan, datum_referenz, bezeichnung, methode, bundesland) "
+                    "VALUES (:datum_plan, :datum_referenz, :bezeichnung, :methode, :bundesland)", row)
+            conn.commit()
+
+            _rebuild_ferien_from_kalender(conn, planjahr)
+            dm_msg = _auto_datumsmapping(conn, planjahr)
+
             st.success(
-                f"✅ Geladen: {counts['feiertage']} Feiertag-Einträge und "
-                f"{counts['sondertage']} Sondertag-Einträge für {len(LOAD_YEARS)} Jahre."
+                f"✅ Geladen: {len(all_ft)} Feiertag-Einträge, "
+                f"{len(all_st)} Sondertage für Jahre {vj}+{planjahr}.  \n{dm_msg}"
             )
+            st.rerun()
         except Exception as e:
-            st.error(f"Fehler beim Laden: {e}")
+            st.error(f"Fehler: {e}")
             import traceback
             st.code(traceback.format_exc())
 
 st.divider()
 
-# ── Section 2: Gespeicherte Feiertage (filterable + editable) ────────────────────
-st.subheader("2. Gespeicherte Feiertage")
+# ── Abschnitt 2: Gespeicherte Feiertage, Sondertage und Ferien ───────────────
+st.subheader("2. Gespeicherte Feiertage, Sondertage und Ferien")
 
-existing_ft = pd.read_sql(
-    "SELECT id, datum_plan, datum_vj, name, bundesland, art FROM feiertage ORDER BY datum_plan, bundesland",
-    conn,
-)
+# Jahresfilter gemeinsam oben
+all_jahre = sorted(set(
+    [r[0] for r in conn.execute(
+        "SELECT DISTINCT CAST(substr(datum_plan,1,4) AS INTEGER) FROM feiertage"
+    ).fetchall()] +
+    [r[0] for r in conn.execute(
+        "SELECT DISTINCT CAST(substr(datum_plan,1,4) AS INTEGER) FROM sondertage"
+    ).fetchall()] +
+    [r[0] for r in conn.execute(
+        "SELECT DISTINCT jahr FROM ferien_kalender"
+    ).fetchall()]
+), reverse=True) or [planjahr]
 
-if existing_ft.empty:
-    st.info("Noch keine Feiertage hinterlegt.")
-else:
-    jahre_ft = sorted(
-        pd.to_datetime(existing_ft["datum_plan"], errors="coerce")
-        .dt.year.dropna().unique().astype(int), reverse=True
+filter_jahr = st.selectbox("Jahr anzeigen", options=all_jahre, key="ft_jahr_global")
+
+tab_ft, tab_st, tab_fer = st.tabs(["Feiertage", "Sondertage", "Ferien"])
+
+# ── Tab Feiertage ──
+with tab_ft:
+    filter_art = st.selectbox("Art", ["alle", "feiertag", "feiertagstag"], key="ft_art_filter")
+
+    ft_all = pd.read_sql(
+        "SELECT id, datum_plan, datum_vj, name, bundesland, art FROM feiertage "
+        "WHERE datum_plan LIKE ? ORDER BY datum_plan, bundesland",
+        conn, params=(f"{filter_jahr}-%",)
     )
-    col_fj, col_art = st.columns([1, 1])
-    with col_fj:
-        filter_jahr = st.selectbox("Jahr", jahre_ft, key="ft_view_jahr")
-    with col_art:
-        filter_art = st.selectbox("Art", ["alle", "feiertag", "feiertagstag"], key="ft_view_art")
-
-    subset_ft = existing_ft[existing_ft["datum_plan"].str.startswith(str(filter_jahr))]
     if filter_art != "alle":
-        subset_ft = subset_ft[subset_ft["art"] == filter_art]
+        ft_all = ft_all[ft_all["art"] == filter_art]
+
+    ft_orig = ft_all.drop(columns=["id"]).reset_index(drop=True)
 
     edited_ft = st.data_editor(
-        subset_ft.drop(columns=["id"]).reset_index(drop=True),
-        use_container_width=True,
-        hide_index=True,
-        key="ft_editor",
+        ft_orig.copy(),
+        use_container_width=True, hide_index=True,
+        num_rows="dynamic",
+        key=f"ft_editor_{filter_jahr}_{filter_art}",
         height=350,
+        column_config={
+            "datum_plan": st.column_config.TextColumn("Datum Plan (YYYY-MM-DD)"),
+            "datum_vj":   st.column_config.TextColumn("Datum VJ (YYYY-MM-DD)"),
+            "art":        st.column_config.SelectboxColumn("Art", options=["feiertag", "feiertagstag"]),
+            "bundesland": st.column_config.TextColumn("Bundesland"),
+        },
     )
-    st.caption(f"{len(subset_ft)} Einträge für {filter_jahr}"
-               + (f" / {filter_art}" if filter_art != "alle" else ""))
+    st.caption(f"{len(ft_orig)} Einträge für {filter_jahr}")
 
-    if st.button("\U0001f4be Feiertage-Änderungen speichern", key="save_ft"):
-        # Re-map by original id stored in subset_ft
-        orig_ids = subset_ft["id"].tolist()
-        for i, row in edited_ft.iterrows():
-            if i < len(orig_ids):
-                conn.execute(
-                    "UPDATE feiertage SET datum_plan=?, datum_vj=?, name=?, bundesland=?, art=? WHERE id=?",
-                    (row["datum_plan"], row.get("datum_vj"), row["name"],
-                     row["bundesland"], row.get("art", "feiertag"), int(orig_ids[i]))
-                )
+    if not ft_orig.astype(str).equals(edited_ft.astype(str)):
+        # Delete existing for this year+art, then re-insert
+        if filter_art == "alle":
+            conn.execute("DELETE FROM feiertage WHERE datum_plan LIKE ?", (f"{filter_jahr}-%",))
+        else:
+            conn.execute("DELETE FROM feiertage WHERE datum_plan LIKE ? AND art=?",
+                         (f"{filter_jahr}-%", filter_art))
+        for _, row in edited_ft.dropna(subset=["datum_plan", "name"]).iterrows():
+            conn.execute(
+                "INSERT OR IGNORE INTO feiertage (datum_plan, datum_vj, name, bundesland, art) "
+                "VALUES (?,?,?,?,?)",
+                (row.get("datum_plan"), row.get("datum_vj"), row.get("name"),
+                 row.get("bundesland", "alle"), row.get("art", "feiertag"))
+            )
         conn.commit()
-        st.success("✅ Feiertage gespeichert.")
+        dm_msg = _auto_datumsmapping(conn, planjahr)
+        st.toast(f"✅ Feiertage gespeichert. {dm_msg}")
         st.rerun()
 
-st.divider()
-
-# ── Section 3: Sondertage (filterable + editable) ──────────────────────────────
-st.subheader("3. Sondertage")
-
-existing_st = pd.read_sql(
-    "SELECT id, datum_plan, datum_referenz, bezeichnung, methode, bundesland "
-    "FROM sondertage ORDER BY datum_plan",
-    conn,
-)
-
-if existing_st.empty:
-    st.info("Noch keine Sondertage hinterlegt.")
-else:
-    jahre_st = sorted(
-        pd.to_datetime(existing_st["datum_plan"], errors="coerce")
-        .dt.year.dropna().unique().astype(int), reverse=True
+# ── Tab Sondertage ──
+with tab_st:
+    st_all = pd.read_sql(
+        "SELECT id, datum_plan, datum_referenz, bezeichnung, methode, bundesland FROM sondertage "
+        "WHERE datum_plan LIKE ? ORDER BY datum_plan",
+        conn, params=(f"{filter_jahr}-%",)
     )
-    filter_jahr_st = st.selectbox("Jahr", jahre_st, key="st_view_jahr")
-    subset_st = existing_st[existing_st["datum_plan"].str.startswith(str(filter_jahr_st))]
+    st_orig = st_all.drop(columns=["id"]).reset_index(drop=True)
 
     edited_st = st.data_editor(
-        subset_st.drop(columns=["id"]).reset_index(drop=True),
-        use_container_width=True,
-        hide_index=True,
-        key="st_editor",
-        height=300,
+        st_orig.copy(),
+        use_container_width=True, hide_index=True,
+        num_rows="dynamic",
+        key=f"st_editor_{filter_jahr}",
+        height=350,
+        column_config={
+            "datum_plan":      st.column_config.TextColumn("Datum Plan (YYYY-MM-DD)"),
+            "datum_referenz":  st.column_config.TextColumn("Datum Referenz (YYYY-MM-DD)"),
+            "methode":         st.column_config.SelectboxColumn("Methode", options=["referenz", "samstag"]),
+            "bundesland":      st.column_config.TextColumn("Bundesland"),
+        },
     )
-    st.caption(f"{len(subset_st)} Einträge für {filter_jahr_st}")
+    st.caption(f"{len(st_orig)} Einträge für {filter_jahr}")
 
-    if st.button("\U0001f4be Sondertage-Änderungen speichern", key="save_st"):
-        orig_ids = subset_st["id"].tolist()
-        for i, row in edited_st.iterrows():
-            if i < len(orig_ids):
-                conn.execute(
-                    "UPDATE sondertage SET datum_plan=?, datum_referenz=?, bezeichnung=?, methode=?, bundesland=? WHERE id=?",
-                    (row["datum_plan"], row.get("datum_referenz"), row["bezeichnung"],
-                     row.get("methode", "referenz"), row["bundesland"], int(orig_ids[i]))
-                )
+    if not st_orig.astype(str).equals(edited_st.astype(str)):
+        conn.execute("DELETE FROM sondertage WHERE datum_plan LIKE ?", (f"{filter_jahr}-%",))
+        for _, row in edited_st.dropna(subset=["datum_plan", "bezeichnung"]).iterrows():
+            conn.execute(
+                "INSERT OR IGNORE INTO sondertage "
+                "(datum_plan, datum_referenz, bezeichnung, methode, bundesland) "
+                "VALUES (?,?,?,?,?)",
+                (row.get("datum_plan"), row.get("datum_referenz"), row.get("bezeichnung"),
+                 row.get("methode", "referenz"), row.get("bundesland", "alle"))
+            )
         conn.commit()
-        st.success("✅ Sondertage gespeichert.")
+        dm_msg = _auto_datumsmapping(conn, planjahr)
+        st.toast(f"✅ Sondertage gespeichert. {dm_msg}")
         st.rerun()
 
-st.divider()
+# ── Tab Ferien ──
+with tab_fer:
+    st.caption(
+        "Schulferien manuell eintragen. Für beide Jahre (Vorjahr + Budgetjahr) werden "
+        "automatisch Ferienperioden für die Planung erstellt."
+    )
+    fk_all = pd.read_sql(
+        "SELECT id, bundesland, art, jahr, start, ende FROM ferien_kalender "
+        "WHERE jahr=? OR jahr=? ORDER BY jahr, bundesland, start",
+        conn, params=(vj, planjahr)
+    )
+    fk_orig = fk_all.drop(columns=["id"]).reset_index(drop=True)
 
-# ── Section 4: Schulferien ─────────────────────────────────────────────────────────────
-st.subheader("4. Schulferien")
+    edited_fk = st.data_editor(
+        fk_orig.copy(),
+        use_container_width=True, hide_index=True,
+        num_rows="dynamic",
+        key=f"fk_editor_{planjahr}",
+        height=350,
+        column_config={
+            "bundesland": st.column_config.SelectboxColumn("Bundesland",
+                                                            options=BUNDESLAENDER + ["alle"]),
+            "art":   st.column_config.TextColumn("Art (z.B. Sommerferien)"),
+            "jahr":  st.column_config.NumberColumn("Jahr", min_value=2020, max_value=2040, step=1),
+            "start": st.column_config.TextColumn("Start (YYYY-MM-DD)"),
+            "ende":  st.column_config.TextColumn("Ende (YYYY-MM-DD)"),
+        },
+    )
+    st.caption(f"{len(fk_orig)} Einträge für {vj} + {planjahr}")
 
-st.info(
-    "Schulferien werden für die Schulfilialen-Erkennung benötigt. "
-    "Versuche, Schulferien über die holidays-Bibliothek zu laden. "
-    "Falls nicht verfügbar, bitte manuell in der Tabelle unten eintragen."
-)
-
-col_sf1, col_sf2 = st.columns([1, 1])
-with col_sf1:
-    sf_year = st.number_input("Jahr", min_value=2023, max_value=2036,
-                               value=date.today().year, step=1, key="sf_year")
-with col_sf2:
-    sf_bl = st.selectbox("Bundesland", BUNDESLAENDER, key="sf_bl")
-
-if st.button("Schulferien laden", key="load_schulferien"):
-    try:
-        import holidays as hol_lib
-        school_hols = None
-        try:
-            school_hols = hol_lib.country_holidays(
-                "DE", subdiv=sf_bl, years=sf_year,
-                categories=(hol_lib.SCHOOL,)
+    if not fk_orig.astype(str).equals(edited_fk.astype(str)):
+        conn.execute("DELETE FROM ferien_kalender WHERE jahr=? OR jahr=?", (vj, planjahr))
+        for _, row in edited_fk.dropna(subset=["bundesland", "art"]).iterrows():
+            try:
+                jahr_val = int(row.get("jahr") or 0)
+            except (ValueError, TypeError):
+                continue
+            bl  = str(row.get("bundesland") or "").strip()
+            art = str(row.get("art") or "").strip()
+            s   = str(row.get("start") or "").strip()
+            e   = str(row.get("ende") or "").strip()
+            if not bl or not art or not s or not e:
+                continue
+            conn.execute(
+                "INSERT OR IGNORE INTO ferien_kalender (bundesland, art, jahr, start, ende) "
+                "VALUES (?,?,?,?,?)", (bl, art, jahr_val, s, e)
             )
-        except (AttributeError, NotImplementedError, TypeError):
-            school_hols = None
-
-        if not school_hols:
-            st.info(
-                "Die holidays-Bibliothek liefert für dieses Bundesland/Jahr keine Schulferien. "
-                "Bitte Schulferien manuell in der Tabelle unten eintragen."
-            )
-        else:
-            by_name: dict = {}
-            for d2, name in school_hols.items():
-                by_name.setdefault(name, []).append(d2)
-            inserted = 0
-            for name, dates in by_name.items():
-                dates_sorted = sorted(dates)
-                start_d = dates_sorted[0].isoformat()
-                end_d = dates_sorted[-1].isoformat()
-                conn.execute("""
-                    INSERT OR IGNORE INTO ferien_kalender
-                        (bundesland, art, jahr, start, ende)
-                    VALUES (?,?,?,?,?)
-                """, (sf_bl, name, sf_year, start_d, end_d))
-                inserted += 1
-            conn.commit()
-            st.success(f"✅ {inserted} Schulferienperioden für {sf_bl} {sf_year} gespeichert.")
-    except Exception as e:
-        st.error(f"Fehler: {e}")
-
-fk_df = pd.read_sql(
-    "SELECT id, bundesland, art, jahr, start, ende FROM ferien_kalender ORDER BY jahr, bundesland, start",
-    conn,
-)
-
-st.markdown("**Schulferien-Kalender** (bearbeitbar — neue Zeilen am Ende anhängen):")
-edited_fk = st.data_editor(
-    fk_df.drop(columns=["id"]) if not fk_df.empty else pd.DataFrame(
-        columns=["bundesland", "art", "jahr", "start", "ende"]
-    ),
-    use_container_width=True,
-    hide_index=True,
-    num_rows="dynamic",
-    key="fk_editor",
-    column_config={
-        "bundesland": st.column_config.SelectboxColumn("Bundesland", options=BUNDESLAENDER + ["alle"]),
-        "art": st.column_config.TextColumn("Art (z.B. Sommerferien)"),
-        "jahr": st.column_config.NumberColumn("Jahr", min_value=2020, max_value=2040, step=1),
-        "start": st.column_config.TextColumn("Start (YYYY-MM-DD)"),
-        "ende": st.column_config.TextColumn("Ende (YYYY-MM-DD)"),
-    },
-)
-
-if st.button("\U0001f4be Schulferien-Kalender speichern", key="save_fk"):
-    conn.execute("DELETE FROM ferien_kalender")
-    for _, row in edited_fk.iterrows():
-        bl = str(row.get("bundesland") or "").strip()
-        art = str(row.get("art") or "").strip()
-        if not bl or not art:
-            continue
-        try:
-            jahr = int(row.get("jahr") or 0)
-        except (ValueError, TypeError):
-            continue
-        start = str(row.get("start") or "").strip()
-        ende = str(row.get("ende") or "").strip()
-        if not start or not ende:
-            continue
-        conn.execute("""
-            INSERT OR IGNORE INTO ferien_kalender (bundesland, art, jahr, start, ende)
-            VALUES (?,?,?,?,?)
-        """, (bl, art, jahr, start, ende))
-    conn.commit()
-    st.success("✅ Schulferien-Kalender gespeichert.")
-    st.rerun()
+        conn.commit()
+        _rebuild_ferien_from_kalender(conn, planjahr)
+        dm_msg = _auto_datumsmapping(conn, planjahr)
+        st.toast(f"✅ Ferien gespeichert. {dm_msg}")
+        st.rerun()

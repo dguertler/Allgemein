@@ -200,9 +200,11 @@ class PlanningEngine:
         # Obergrenze (exklusiv) des Basisfensters für schnelle Maskierung
         self.base_mask_end = self._next_month(self.base_end_year, self.base_end_month)
 
-        # Datumsmapping: {(plan_datum, bundesland) → base_datum_str}
+        # Datumsmapping: {(plan_datum, bundesland) → base_datum_str} — nur für planjahr
         dm_rows = c.execute(
-            "SELECT plan_datum, base_datum, bundesland FROM datumsmapping"
+            "SELECT plan_datum, base_datum, bundesland FROM datumsmapping "
+            "WHERE CAST(strftime('%Y', plan_datum) AS INTEGER) = ?",
+            (p.planjahr,)
         ).fetchall()
         self._datumsmapping: dict[tuple, str] = {
             (r["plan_datum"], r["bundesland"]): r["base_datum"] for r in dm_rows

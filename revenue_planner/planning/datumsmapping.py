@@ -9,6 +9,7 @@ the correct reference day in the rolling base year using:
   5. Normal → same ISO-KW + weekday in base year
 
 Description priority (combined): Feiertag > Feiertagstag > Sondertag > Ferien
+Feiertagstage are labelled simply "Feiertagstag" (not the full holiday name).
 """
 from __future__ import annotations
 
@@ -47,7 +48,6 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
     """Generate and persist datumsmapping for planjahr. Returns row count."""
     py = planjahr
 
-    # Distinct bundesländer from filialen
     bl_rows = conn.execute(
         "SELECT DISTINCT bundesland FROM filialen WHERE bundesland IS NOT NULL AND bundesland != ''"
     ).fetchall()
@@ -94,13 +94,14 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                             break
                     if ft_tag:
                         plan_typ = "feiertagstag"
-                        bezeichnung_parts.append(ft_tag["name"])
+                        bezeichnung_parts.append("Feiertagstag")
                         # Feiertagstage werden wie normale Tage behandelt → ISO-KW Basis
 
-                # 3. Sondertag — fügt Bezeichnung hinzu, überschreibt Basis wenn noch kein Typ
+                # 3. Sondertag
                 st_entry = engine._relevant_sondertag(iso, bl)
                 if st_entry:
                     bezeichnung_parts.append(st_entry["bezeichnung"])
+                    base_bezeichnung_parts.append(st_entry["bezeichnung"])
                     if plan_typ == "normal":
                         plan_typ = "sondertag"
                         mapping_art = "sondertag"
@@ -110,11 +111,12 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                             except ValueError:
                                 pass
 
-                # 4. Ferien — fügt Bezeichnung hinzu, überschreibt Basis wenn noch kein Typ
+                # 4. Ferien — immer zur Beschreibung hinzufügen (auch wenn schon anderer Typ)
                 fer = engine._ferien_info_for_day(iso, bl)
                 if fer:
                     art, woche = fer
                     bezeichnung_parts.append(art)
+                    base_bezeichnung_parts.append(art)
                     if plan_typ == "normal":
                         plan_typ = "ferien"
                         mapping_art = "ferien"
@@ -130,7 +132,6 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                             delta = wt - wk_start.weekday()
                             base_d = wk_start + timedelta(days=delta)
                             base_d = max(vj_start, min(base_d, vj_ende))
-                            base_bezeichnung_parts.append(art)
 
                 # 5. Fallback: ISO-KW
                 if base_d is None:

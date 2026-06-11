@@ -206,7 +206,7 @@ class PlanParams:
 
 ```
 Input & Stammdaten:
-  Filialen → Umsatz-Import → Öffnungstage → Feiertage laden → Schulfilialen → Preisanpassung
+  Filialen → Umsatz-Import → Filial-Öffnungstage → Feiertage u. Ferien → Schulfilialen → Datumsmapping → Preisanpassung
 
 Berechnung & Validierung:
   Planung ausführen → Herleitung → Planungsgenauigkeit
@@ -214,13 +214,13 @@ Berechnung & Validierung:
 
 | Seite | Datei | Funktion |
 |-------|-------|----------|
-| Startseite | 1_Startseite.py | DB-Auswahl |
+| Startseite | 1_Startseite.py | DB-Auswahl + Budgetjahr-Dropdown (nur linke Hälfte) |
 | Filialen | 2_Filialen.py | Inline data_editor, Auto-Save, Delete-Bestätigung |
 | Umsatz-Import | 3_Daten_Import.py | Excel/CSV, fil_nr-Validierung, Auto-Erkennung Öffnungstage |
-| Öffnungstage | 9_Oeffnungstage.py | Wochentag + Feiertag je Filiale, Auto-Save |
-| Feiertage laden | 8_Feiertage_Import.py | Multi-Jahr 2023–2036, editierbar, Auto-Save |
+| Filial-Öffnungstage | 9_Oeffnungstage.py | Wochentag + Feiertag je Filiale, Auto-Save |
+| Feiertage u. Ferien | 8_Feiertage_Import.py | Lädt Basiszeitraum+Budgetjahr, Tabs: Feiertage/Sondertage/Ferien, Auto-Save + Datumsmapping-Trigger |
 | Schulfilialen | 12_Schulfilialen.py | ≥80% Nullumsatz = Schulfiliale, Matrix-Editor |
-| Datumsmapping | 13_Datumsmapping.py | Mapping Plantag→Referenztag generieren + prüfen |
+| Datumsmapping | 13_Datumsmapping.py | Mapping Budgettag→Basistag generieren + prüfen |
 | Preisanpassung | 11_Preisanpassung.py | Wachstum % je Monat + Planjahr |
 | Planung ausführen | 6_Planung.py | Berechnung, Bestätigungsdialog, Excel-Export |
 | Herleitung | 10_Herleitung.py | Additive Effekte, Zeilenauswahl-Detailpanel |
@@ -395,6 +395,7 @@ holidays-Lib unterstützt SCHOOL für DE nicht. Nur manuelle Eingabe.
 
 | Git-Hash | Beschreibung |
 |----------|-------------|
+| `0cb9ca8` | Logo margin-top, Budgetjahr-Dropdown immer-anlegen, Datumsmapping Feiertagstage/Ferien-Beschreibungen |
 | `f8b1118` | German UI-Polish: Auto-Save Öffnungstage, Budgetjahr-Dropdown, Logo-Margin, Datumsmapping-Redesign |
 | `071ae5d` | Bugfix: ISO-String-Variable im plan_branch-Inner-Loop korrigiert (zeigte auf letzten Monatstag) |
 | `84d0ebe` | Datumsmapping implementiert (wochentagsbasiertes Basis-Referenz-Matching), Logo-Größe verdoppelt |

@@ -50,7 +50,7 @@ for v in vals:
     s += v
     cumul.append(round(s, 1))
 st.dataframe(
-    pd.DataFrame([{m: f"{c:+.1f} %" for m, c in zip(MONATE, cumul)}], index=["Kumuliert"]),
+    pd.DataFrame([{m: f"{c:.1f} %" for m, c in zip(MONATE, cumul)}], index=["Kumuliert"]),
     use_container_width=True,
 )
 
