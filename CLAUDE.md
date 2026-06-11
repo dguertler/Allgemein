@@ -1,20 +1,22 @@
 # CLAUDE.md — Filialumsatzplanung (Bäcker Görtz / Papperts)
 
-> **Wichtig für Claude Code:** Diese Datei immer zuerst lesen (`Read CLAUDE.md`), bevor  
-> irgendwelche Änderungen vorgenommen oder Fragen beantwortet werden. Sie enthält das  
-> vollständige Wissen über das Projekt, alle Architekturentscheidungen und die offene  
+> **Wichtig für Claude Code:** Diese Datei immer zuerst lesen (`Read CLAUDE.md`), bevor
+> irgendwelche Änderungen vorgenommen oder Fragen beantwortet werden. Sie enthält das
+> vollständige Wissen über das Projekt, alle Architekturentscheidungen und die offene
 > Punkteliste.
 
-> **Pflicht am Ende jeder Sitzung:** Alle Änderungen mit Git-Hash zusammenfassen und  
-> einen Download-Link der aktuellen Branch ausgeben, z. B.:  
-> `https://github.com/dguertler/Allgemein/archive/refs/heads/claude/branch-revenue-planning-kuVgL.zip`
+> **Pflicht am Ende JEDER Sitzung (automatisch, ohne Aufforderung):**
+> 1. CLAUDE.md mit allen Änderungen, neuen Erkenntnissen und TODO-Updates aktualisieren
+> 2. Alle Änderungen committen und auf `master` pushen
+> 3. Git-Hash-Zusammenfassung + Download-Link ausgeben:
+>    `https://github.com/dguertler/Allgemein/archive/refs/heads/master.zip`
 
 ---
 
 ## 1. Projektüberblick
 
-**Ziel:** Web-App (Streamlit + SQLite) zur tagesgenauen Umsatzplanung (Budget) für  
-ca. 255 Filialen der Bäcker Görtz / Papperts Gruppe. Die App ersetzt eine manuelle  
+**Ziel:** Web-App (Streamlit + SQLite) zur tagesgenauen Umsatzplanung (Budget) für
+ca. 255 Filialen der Bäcker Görtz / Papperts Gruppe. Die App ersetzt eine manuelle
 Excel-Budgetierungsdatei.
 
 **Stack:**
@@ -38,7 +40,7 @@ revenue_planner/
 │   ├── engine.py                   # Kern-Planungslogik (PlanningEngine, PlanParams, DayPlan)
 │   └── export.py                   # Excel-Export der Planung
 └── ui/
-    ├── session.py                  # get_conn(), get_gmbh(), require_db()
+    ├── session.py                  # get_conn(), get_gmbh(), require_db(), get_budgetjahr()
     ├── assets/                     # goertz_logo.png, papperts_logo.png
     └── pages/
         ├── 1_Startseite.py
@@ -46,11 +48,13 @@ revenue_planner/
         ├── 3_Daten_Import.py       # IST-Umsatz hochladen + Validierung
         ├── 4_Parameter.py          # Planungsparameter (Wachstum, Ferien-Puffer, …)
         ├── 5_Neue_Filialen.py      # Neue Filialen anlegen
-        ├── 6_Planung.py            # Planung ausführen + Export
+        ├── 6_Planung.py            # Planung ausführen + Excel-Export
         ├── 7_Planungsgenauigkeit.py# Plan vs. IST Vergleich
         ├── 8_Feiertage_Import.py   # Feiertage aller 16 Bundesländer + Fasching/Muttertag
         ├── 9_Oeffnungstage.py      # Wochentags- und Feiertags-Öffnung je Filiale
-        └── 10_Herleitung.py        # Wasserfall-Analyse der Planungseffekte
+        ├── 10_Herleitung.py        # Additive Effektzerlegung / Wasserfall-Analyse
+        ├── 11_Preisanpassung.py    # Monatliche Preisanpassung % je Planjahr
+        └── 12_Schulfilialen.py     # Auto-Erkennung + Matrix-Editor Schulferien
 ```
 
 ---
@@ -59,47 +63,66 @@ revenue_planner/
 
 ### Stammdaten
 ```sql
-filialen       (fil_nr PK, bezeichnung, bundesland, aktiv)
+filialen (fil_nr TEXT PK, bezeichnung, bundesland, aktiv,
+          eroeffnung TEXT, eroeffnung_ende TEXT, flag_kein_wachstum INTEGER)
 ```
 
 ### IST-Daten
 ```sql
-ist_umsatz     (fil_nr, datum, umsatz)          -- tagesgenau, UNIQUE(fil_nr, datum)
+ist_umsatz (fil_nr TEXT, datum TEXT, umsatz REAL)  -- UNIQUE(fil_nr, datum)
+-- fil_nr wird IMMER als TEXT gespeichert (importer.py: astype(str).strip())
+-- datum IMMER als ISO "YYYY-MM-DD"
 ```
 
 ### Feiertage / Sondertage
 ```sql
-feiertage      (name, datum, bundesland, datum_vj, art)
-               -- art: 'feiertag' | 'sondertag'
-               -- datum_vj: entsprechendes Datum im Basiszeitraum
-sondertage     (name, datum, bundesland)         -- Fasching etc.
+feiertage (id, datum_plan TEXT, datum_vj TEXT, name TEXT, bundesland TEXT,
+           art TEXT)  -- art: 'feiertag' | 'feiertagstag'
+           -- WICHTIG: 'feiertagstag' = Vor-/Nachtage (z.B. 2.1. nach Neujahr)
+           -- Engine filtert nur art='feiertag' → Feiertagstage sind normale Tage!
+sondertage (id, datum_plan, datum_referenz, bezeichnung, methode, bundesland)
+           -- methode: 'samstag' | 'referenz'
 ```
 
 ### Öffnungszeiten
 ```sql
-filial_oeffnung  (fil_nr, wochentag, offen)      -- wochentag: 0=Mo … 6=So
-filial_feiertag  (fil_nr, feiertag_name, offen)
-ferien_faktor    (fil_nr, bundesland, ferien_art, woche, faktor)
+filial_oeffnung  (fil_nr, wochentag INT, offen INT)  -- 0=Mo…6=So
+filial_feiertag  (fil_nr, feiertag_name TEXT, offen INT)
+ferien_faktor    (fil_nr, bundesland, ferien_art, woche INT, faktor REAL)
+```
+
+### Schulferien
+```sql
+ferien (id, bundesland, art, start_vj, ende_vj, start_plan, ende_plan)
+ferien_kalender (bundesland, art, jahr, start, ende)  -- manuelle Eingabe
+filial_schulferien (fil_nr, ferien_art, bundesland)   -- Schulfilialen-Matrix
 ```
 
 ### Planungsergebnis
 ```sql
 planung (
-    fil_nr, datum, bundesland,
-    -- Additive Effekte (exakte Identität: Summe = budget)
-    ist_vj,           -- IST-Umsatz Vorjahr (Basiszeitraum)
-    eff_oeffnung,     -- Effekt neue/weggefallene Öffnungstage
-    eff_verteilung,   -- Kalenderverschiebung (Wochentag-Verschiebung im Monat)
-    eff_wochentag,    -- Wochentag-Gewichtung (Hoch-Umsatz-Tag vs. Basis)
-    eff_preis,        -- Preis-/Wachstumseffekt (globaler %-Satz)
-    eff_ferien,       -- Ferieneffekt (per Ferienwoche ermittelt)
-    eff_feiertag,     -- Feiertagseffekt (Sondertag / geschlossen)
-    eff_norm,         -- Normierungsrest (Rundungausgleich)
-    budget,           -- Tagesbudget = Summe aller Effekte + ist_vj
+    fil_nr, datum, bundesland, wochentag,
+    ist_vj,         -- IST-Umsatz des Basiszeitraum-Referenztags
+    eff_oeffnung,   -- Effekt neue/weggefallene Öffnungstage
+    eff_verteilung, -- IST-Einzeltag → Wochentags-Ø des Monats
+    eff_wochentag,  -- Wochentagsmix-Effekt Planjahr vs. Basisjahr
+    eff_preis,      -- Preis-/Wachstumsfaktor
+    eff_ferien,     -- Ferieneffekt (per Ferienwoche)
+    eff_feiertag,   -- Feiertagseffekt
+    eff_norm,       -- Normierungsrest (in UI ausgeblendet, in DB vorhanden)
+    budget,         -- Tagesbudget = Summe aller Effekte + ist_vj
     monat_basis, monat_hoch, monat_plan,
-    -- Backwards-compat
-    tagesumsatz_plan, liefer_plan, gesamt_plan
+    tagestyp TEXT,  -- 'normal'|'feiertag'|'sondertag'|'ferien'|'geschlossen'
+    feiertag_name, ferien_art, normalisierung,
+    tagesumsatz_plan, gesamt_plan  -- Backwards-compat-Spalten
 )
+```
+
+### Sonstige
+```sql
+parameter_monat (planjahr, monat, wachstum_pct)
+planwert_override (fil_nr, planjahr, monat, planwert)
+neue_filialen_plan (fil_nr, planjahr, monat, planwert, eroeffnung_datum)
 ```
 
 ---
@@ -108,138 +131,258 @@ planung (
 
 ### 4.1 Basiszeitraum (Rolling 12 Monate)
 
-- **Stichtag** (`stichtag`): Konfigurierbar, Standard = heute
-- **Basiszeitraum** = letzte 12 vollständig abgeschlossene Kalendermonate vor Stichtag
-- Beispiel: Stichtag 9. Juni 2026 → Basiszeitraum = **Juni 2025 – Mai 2026**
-- Jeder Kalendermonat 1–12 wird exakt einem Jahr im Fenster zugeordnet:
-  - Jan–Mai → aktuelles Jahr des Fensters (2026)
-  - Jun–Dez → Vorjahr des Fensters (2025)
+- **Stichtag:** `date(today.year, 1, 1)` wenn `planjahr <= today.year` (→ volles Vorjahr),
+  sonst `date.today()` (rolling)
+- **Basiszeitraum** = 12 Monate endend am letzten Monat vor Stichtag
 - Methoden: `_compute_base_window()`, `base_year_for_month(month)`, `base_window_label()`
 
-### 4.2 Additive Effektzerlegung (exakte Identität)
+### 4.2 Additive Effektzerlegung
 
 ```
-budget = ist_vj
-       + eff_oeffnung    (Öffnungskorrektur: neue oder weggefallene Tage)
-       + eff_verteilung  (Wochentag-Verschiebung im Monat: tag_basis − ist_vj)
-       + eff_wochentag   (Tages-Gewichtung: tag_hoch − tag_basis)
-       + eff_preis       (Preis-/Wachstumsfaktor: tag_plan − tag_hoch)
-       + eff_ferien      (Ferieneffekt: raw − tag_plan, nur Ferientage)
-       + eff_feiertag    (Feiertagseffekt: raw − tag_plan, nur Feiertage/Sondertage)
-       + eff_norm        (Normierungsrest = budget − raw, Rundungsausgleich)
+budget = ist_vj + eff_oeffnung + eff_verteilung + eff_wochentag
+       + eff_preis + eff_ferien + eff_feiertag + eff_norm
 ```
 
-Getestet: 0 Verletzungen der additiven Identität über 365 Tage.
+- `eff_norm` wird in der UI **nicht** angezeigt (in DB gespeichert für Auditing)
+- Die Identität gilt exakt auf Tagesebene und summiert sich korrekt auf alle Aggregationen
 
-### 4.3 Öffnungstage-Logik
+### 4.3 Bekannte Schwachstelle: Kalender-Tages-Matching
 
-- `filial_oeffnung`: Wochentag 0–6, offen=1/0, Auto-Erkennung aus IST-Daten (≥30% Tage mit Umsatz > 0)
-- `filial_feiertag`: pro Filiale × Feiertag, Auto-Erkennung: war am entsprechenden Datum im Basiszeitraum Umsatz > 0?
-- Fallback für neue Filialen ohne Historie: Feiertag = geschlossen
-- `_is_open_weekday(fil_nr, wt)`: Standard True wenn kein Eintrag
-- `_is_open_feiertag(fil_nr, name)`: Standard False wenn kein Eintrag
+**Problem:** Die Engine nutzt aktuell `_safe_date(base_year, month, day)` — also
+denselben Kalendertag im Basisjahr. Wenn dieser Tag ein Sonntag, Feiertag oder
+Ferientag war, ist `ist_vj = 0` und `eff_verteilung` übernimmt den gesamten
+Tageswert (irreführende Darstellung, Budget trotzdem korrekt).
 
-### 4.4 Ferieneffekt (Per-Woche-Faktor)
+**Geplante Lösung: Datumsmapping** (siehe Abschnitt 9.1)
+- Wochentagsbasiertes Matching: gleicher Wochentag in kalenderlich entsprechender Woche
+- Feiertag-zu-Feiertag Matching (Christi Himmelfahrt 2026 ↔ Christi Himmelfahrt 2025)
+- Ferienwochen-Matching je Bundesland
 
-- Pufferzeitraum: 2 Wochen **vor** Ferienbeginn (konfigurierbar über `ferien_puffer_wochen`)
-- Ø IST Ferienwoche / Ø IST Pufferwoche (wochentagsgematcht) = Faktor je Woche
-- Cached in `self._ferien_cache` während `plan_branch()`
+### 4.4 Feiertagstage (art='feiertagstag')
 
-### 4.5 PlanParams Dataclass
+`_relevant_feiertag()` filtert **nur** `art='feiertag'`. Feiertagstage (Vor-/Nachtage
+wie 2.1. nach Neujahr) werden als normale Tage behandelt. Das wurde korrigiert nach
+Bug: Fil. 120, 2.1.2026 zeigte budget=0 weil Feiertagstag defaultmäßig geschlossen.
+
+### 4.5 Öffnungstage-Defaults
+
+- Wochentag: **offen** (True) wenn kein Eintrag in `filial_oeffnung`
+- Feiertag: **geschlossen** (False) wenn kein Eintrag in `filial_feiertag`
+- `filial_oeffnung` wird auto-erkannt aus IST-Daten (≥30% Tage mit Umsatz > 0)
+
+### 4.6 Ferieneffekt (Per-Woche-Faktor)
+
+- Pufferzeitraum: 2 Wochen vor Ferienbeginn (konfigurierbar `ferien_puffer_wochen`)
+- Faktor = Ø IST Ferienwoche / Ø IST Pufferwoche (wochentagsgematcht)
+- Cached in `self._ferien_cache`
+
+### 4.7 save() — DELETE before INSERT
+
+`engine.save()` löscht zuerst alle existierenden `planung`-Zeilen für die berechneten
+`fil_nr` × `planjahr`, dann INSERT OR REPLACE. Verhindert Datenmüll bei Teil-Recalcs.
+
+### 4.8 PlanParams
 
 ```python
 @dataclass
 class PlanParams:
     planjahr: int
-    wachstum_pct: float = 0.0          # globaler Preis-/Wachstumseffekt in %
-    stichtag: date | None = None        # Basiszeitraum-Ankerdatum
+    wachstum_pct: float = 0.0
+    stichtag: date | None = None
     ferien_puffer_wochen: int = 2
-    apply_ramadan: bool = False         # OFFEN – noch nicht implementiert
-    apply_fasching: bool = False        # OFFEN – noch nicht implementiert
+    wachstum_monat: dict = field(default_factory=dict)  # {monat: pct}
+    apply_ramadan: bool = False      # TODO: nicht implementiert
+    apply_fasching: bool = False     # TODO: nicht implementiert
     fasching_wirkung_pct: float = 0.0
 ```
 
 ---
 
-## 5. UI-Seiten
+## 5. UI-Seiten und Navigation
 
-Navigation-Struktur (app.py):
-- **" "** (kein Titel): Startseite
-- **Input & Stammdaten**: Filialen, Umsatz-Import, Feiertage laden, Öffnungstage, Schulfilialen, Preisanpassung je Monat
-- **Berechnung & Validierung**: Planung ausführen, Herleitung, Planungsgenauigkeit
+**Aktuelle Navigation (app.py) — Reihenfolge:**
+
+```
+Input & Stammdaten:
+  Filialen → Umsatz-Import → Öffnungstage → Feiertage laden → Schulfilialen → Preisanpassung
+
+Berechnung & Validierung:
+  Planung ausführen → Herleitung → Planungsgenauigkeit
+```
 
 | Seite | Datei | Funktion |
 |-------|-------|----------|
-| Startseite | 1_Startseite.py | Willkommen + DB-Auswahl |
-| Filialen | 2_Filialen.py | Stammdaten Filialen – inline data_editor mit num_rows="dynamic", Delete-Bestätigung via session_state |
-| Umsatz-Import | 3_Daten_Import.py | IST-Daten hochladen (Excel/CSV), Validierung gegen Filialen-Stamm |
-| Feiertage laden | 8_Feiertage_Import.py | Multi-Jahr (2023–2036): Feiertage, Feiertagstage, Sondertage, Ramadan, Fasching (6 Tage), Schulferien, editierbar |
-| Öffnungstage | 9_Oeffnungstage.py | Wochentags- + Feiertags-Öffnung je Filiale, Default = geschlossen wenn keine Daten |
-| Schulfilialen | 12_Schulfilialen.py | Auto-Erkennung geschlossener Filialen in Ferien (≥80% Nullumsatz), Matrix-Editor |
-| Preisanpassung je Monat | 11_Preisanpassung.py | Monatliche Preisanpassung % je Planjahr, Kumuliert-Anzeige |
-| Planung ausführen | 6_Planung.py | Berechnung starten + Excel-Export |
-| Herleitung | 10_Herleitung.py | Wasserfall Tag/Woche/Monat × Filiale/BL/Gesamt |
-| Planungsgenauigkeit | 7_Planungsgenauigkeit.py | Plan vs. IST (aktuelles + Vorjahr) |
+| Startseite | 1_Startseite.py | DB-Auswahl |
+| Filialen | 2_Filialen.py | Inline data_editor, Auto-Save, Delete-Bestätigung |
+| Umsatz-Import | 3_Daten_Import.py | Excel/CSV, fil_nr-Validierung, Auto-Erkennung Öffnungstage |
+| Öffnungstage | 9_Oeffnungstage.py | Wochentag + Feiertag je Filiale, Auto-Save |
+| Feiertage laden | 8_Feiertage_Import.py | Multi-Jahr 2023–2036, editierbar, Auto-Save |
+| Schulfilialen | 12_Schulfilialen.py | ≥80% Nullumsatz = Schulfiliale, Matrix-Editor |
+| Preisanpassung | 11_Preisanpassung.py | Wachstum % je Monat + Planjahr |
+| Planung ausführen | 6_Planung.py | Berechnung, Bestätigungsdialog, Excel-Export |
+| Herleitung | 10_Herleitung.py | Additive Effekte, Zeilenauswahl-Detailpanel |
+| Planungsgenauigkeit | 7_Planungsgenauigkeit.py | Plan vs. IST, Abweichungen |
 
 ---
 
-## 6. Import-Validierung (3_Daten_Import.py)
+## 6. UI-Patterns und wichtige Implementierungsdetails
 
-- Vor dem eigentlichen Import: fil_nr aus Upload-Datei vs. `filialen`-Tabelle prüfen
-- **Wenn eine Filiale fehlt: kompletten Import abbrechen** (keine Teilimporte)
-- Erfolgsmeldung enthält: Anzahl importierte Zeilen + Anzahl neu erkannte Öffnungstage
+### Auto-Save Pattern
+Alle Editoren (Filialen, Öffnungstage, Feiertage) verwenden Auto-Save:
+- Vergleich `orig.astype(str).equals(edited.astype(str))` bei jedem Rerun
+- Änderung erkannt → DB-Update + `st.toast()`
+- Kein expliziter Speichern-Button mehr
+
+### Filter-Persistenz (Session State)
+Alle `st.multiselect` und `st.selectbox` in Herleitung und Planungsgenauigkeit
+haben `key=`-Parameter → Filterstand bleibt beim Seitenwechsel erhalten.
+
+Keys:
+- `herleitung_fil_filter`, `herleitung_bl_filter`, `herleitung_zeit`, `herleitung_entity`
+- `plangenau_fil_filter`, `plangenau_bl_filter`, `plangenau_zeit`, `plangenau_entity`
+
+### fil_nr Typ-Normierung
+`fil_nr` wird in `ist_umsatz` immer als TEXT gespeichert (importer.py). In `planung`
+kann es je nach Insertion als INTEGER vorliegen. **Überall `str(r["fil_nr"])`
+verwenden** wenn `ist_umsatz` und `planung` verglichen werden (7_Planungsgenauigkeit.py).
+
+### German Number Format
+```python
+f"{float(val):,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
+# → "80.000" für 80000
+```
+
+### pd.NA / NaN sichere Formatierung
+```python
+def _fmt_de(val):
+    try:
+        if pd.isna(val): return ""
+    except (TypeError, ValueError): pass
+    try:
+        return f"{float(val):,.0f}".replace(",","X").replace(".",",").replace("X",".")
+    except (TypeError, ValueError): return ""
+```
+
+### Herleitung: Nur berechnete Filialen anzeigen
+```python
+fil_has_data = df_all.groupby("fil_nr")[["budget","ist_vj"]].sum().abs().sum(axis=1) > 0
+active_fils = set(fil_has_data[fil_has_data].index)
+df_all = df_all[df_all["fil_nr"].isin(active_fils)]
+```
+
+### Herleitung: eff_norm ausgeblendet
+`eff_norm` wird in der DB gespeichert aber aus allen UI-Anzeigen entfernt:
+- Nicht in `eff_cols` für Aggregation
+- Nicht in Spalten-`ordered`-Liste
+- Nicht in Tagesdetails-Expander
+- Wird beim `drop_cols`-Step explizit gedroppt
+
+### Spinner / Loading
+CSS in `app.py` zeigt spinning 🥨 Brezel + "Loading..." Text:
+```css
+[data-testid="stStatusWidget"]::before { content: "🥨"; animation: brezel-spin 1.5s linear infinite; }
+[data-testid="stStatusWidget"]::after { content: "Loading..."; }
+```
 
 ---
 
 ## 7. Feiertage (8_Feiertage_Import.py)
 
-- Python-Bibliothek `holidays` (bereits in requirements.txt)
+- Python-Bibliothek `holidays`
 - Alle 16 Bundesländer: `holidays.country_holidays("DE", subdiv=bl, years=year)`
-- Bundesweit-Flag: Feiertag ist in allen 16 Ländern vorhanden
-- `datum_vj`: Entsprechendes Datum im Basiszeitraum (für Öffnungserkennnung)
-- **Feiertagstage:** Tag vor + nach einem Feiertag; Sonntag→keine; Montag→auch Samstag (-2, -1, +1)
-- **Fasching:** 6 Tage ab Weiberfastnacht (Ostern-52): Do, Fr, Sa, So, Mo (Rosenmontag, -48), Di (Fastnacht, -47)
+- **Feiertagstage** (art='feiertagstag'): Tag vor + nach Feiertag; Sonntag→keine;
+  Montag→auch Sa (-2, -1, +1). In Engine als normale Tage behandelt!
+- **Fasching:** 6 Tage ab Weiberfastnacht (Ostern-52)
 - **Muttertag:** 2. Sonntag im Mai
-- **Ramadan:** Hardcoded-Dict 2023–2036 (ca. Gregorianische Daten)
-- **Schulferien:** `ferien_kalender`-Tabelle (bundesland, art, jahr, start, ende); holidays-Library unterstützt SCHOOL für DE nicht → manuelle Eingabe
-- **Ladezeitraum:** `LOAD_YEARS = range(2023, 2037)` (14 Jahre)
+- **Ramadan:** Hardcoded-Dict 2023–2036
+- **Schulferien:** manuelle Eingabe in `ferien_kalender`-Tabelle
+- Ladezeitraum: `LOAD_YEARS = range(2023, 2037)`
 
 ---
 
-## 8. Logos & Styling
+## 8. Import-Validierung (3_Daten_Import.py)
 
-- `app.py`: `_combined_logo_bytes()` kombiniert goertz_logo.png + papperts_logo.png zu einem PNG via Pillow
-- `st.logo(bytes, size="large")` platziert Logo **über** der Navigation
-- CSS-Injection: `[data-testid="stSidebarHeader"] img { background: #ffffff !important; border-radius: 5px !important; }`
+- fil_nr-Validierung gegen `filialen`-Tabelle → bei fehlendem Eintrag: Import abbrechen
+- fil_nr wird als TEXT normiert: `df["fil_nr"] = df["fil_nr"].astype(str).str.strip()`
+- datum als ISO: `df["datum"] = df["datum"].dt.strftime("%Y-%m-%d")`
 
 ---
 
 ## 9. Offene Punkte (TODO)
 
-| # | Thema | Details |
-|---|-------|---------|
-| 1 | **Ramadan-Effekt** | Ähnlich Fasching: Sonderfaktor für betroffene Filialen. `apply_ramadan` in PlanParams bereits angelegt, Logik fehlt noch. |
-| 2 | **Fasching-Wirkung** | `apply_fasching` + `fasching_wirkung_pct` in PlanParams bereits angelegt. Warnung in UI wenn Fasching geladen: "Fasching-Wirkung% in Parameter setzen". Berechnung fehlt noch. |
-| 3 | **Warengruppen-Budget** | Artikelgruppen-Budgetierung bewusst ausgelassen (Out of Scope). |
-| 4 | **Feiertagsreferenz-Algorithmus** | Engine soll Feiertage mit umliegenden Sonntagen vergleichen (nicht gleiche Woche, nicht in Ferien, nicht in Woche mit anderem Feiertag, muss Umsatz haben). Aktuell einfacherer datum_vj-Ansatz. |
-| 5 | **Tooltip Herleitung** | Beim Hover über Feiertagseffekte sollen die verwendeten Vergleichstage angezeigt werden. |
-| 6 | **Schulferien Auto-Load** | holidays-Lib unterstützt SCHOOL-Kategorie für DE nicht. Aktuell nur manuelle Eingabe in ferien_kalender. |
+### 9.1 Datumsmapping (HOHE PRIORITÄT — nächste Sitzung)
+
+**Konzept:** Statt `_safe_date(base_year, month, day)` (gleicher Kalendertag) ein
+wochentagsbasiertes Mapping erstellen, das für jeden Plantag den korrekten
+Referenztag im Basisjahr bestimmt.
+
+**Mapping-Regeln:**
+1. Feiertag (plan) → Feiertag (basis): Christi Himmelfahrt 2026 ↔ Christi Himmelfahrt 2025
+2. Ferientag Woche N (plan) → Ferientag Woche N (basis): gleiche Ferienwoche, je Bundesland
+3. Normaltag → gleicher Wochentag in kalenderlich entsprechender ISO-KW des Basisjahres
+
+**Neue DB-Tabelle:**
+```sql
+datumsmapping (
+    plan_datum TEXT,      -- ISO Plantag
+    base_datum TEXT,      -- ISO Referenztag im Basisjahr
+    plan_typ TEXT,        -- 'normal'|'feiertag'|'ferien'|'sondertag'
+    base_typ TEXT,
+    bundesland TEXT,      -- 'alle' oder spezifisch (für Ferien)
+    mapping_art TEXT,     -- 'iso_kw'|'feiertag'|'ferien'
+    PRIMARY KEY (plan_datum, bundesland)
+)
+```
+
+**Neue UI-Seite:** "Datumsmapping" (zwischen Schulfilialen und Planung ausführen)
+- Zeigt Tabelle: Datum 2026 | Wochentag | Typ | Referenz 2025 | Wochentag | Typ | BL
+- Filter nach Bundesland, Monat
+- Wird automatisch generiert wenn Feiertage + Ferien geladen sind
+- Muss NEU generiert werden wenn Feiertage/Ferien geändert werden
+
+**Engine-Anpassung:**
+- `_ist_on(fil_nr, mapping.get((plan_iso, bl), plan_iso).base_datum)` statt `_safe_date()`
+- `ist_vj` wäre dann IMMER ein echter Wochentags-Vergleichswert (nie 0 wegen Sonntag)
+
+### 9.2 Ramadan-Effekt
+
+`apply_ramadan` in PlanParams angelegt, Logik fehlt. Ähnlich Ferieneffekt.
+
+### 9.3 Fasching-Wirkung
+
+`apply_fasching` + `fasching_wirkung_pct` in PlanParams angelegt. Fehlt noch.
+
+### 9.4 Tooltips Herleitung (Zellen)
+
+Streamlit unterstützt **keine** Hover-Tooltips auf einzelnen Tabellenzellen.
+Aktueller Stand: Spalten-Header haben `help=`-Text. Zeilenklick öffnet Detail-Panel.
+Wenn echte Zellen-Tooltips gewünscht: Ag-Grid oder Custom Component nötig.
+
+### 9.5 Warengruppen-Budget
+
+Bewusst Out of Scope.
+
+### 9.6 Schulferien Auto-Load
+
+holidays-Lib unterstützt SCHOOL für DE nicht. Nur manuelle Eingabe.
 
 ---
 
 ## 10. Entwicklungsregeln für Claude Code
 
 1. **Diese Datei zuerst lesen** (`Read CLAUDE.md`) vor jeder Arbeitssitzung.
-2. **Branch:** Alle Änderungen auf `claude/branch-revenue-planning-kuVgL` entwickeln.
+2. **Branch:** `master` (Entwicklung direkt auf master, kein Feature-Branch mehr).
 3. **Commits:** Aussagekräftige englische Commit-Messages.
-4. **Am Ende jeder Sitzung:**
-   - Alle Änderungen mit Git-Hash zusammenfassen
-   - Download-Link ausgeben:  
-     `https://github.com/dguertler/Allgemein/archive/refs/heads/claude/branch-revenue-planning-kuVgL.zip`
-5. **Keine halben Implementierungen.** Wenn etwas zu groß ist, als TODO in dieser Datei erfassen.
-6. **Keine Breaking Changes** an der additiven Effekt-Identität ohne Regressionstests.
-7. **SQLite-Migrationen** immer in `_migrate()` in `schema.py` ergänzen (nie Tabellen droppen).
-8. **Öffnungstage-Defaults:** Wochentag = offen (True), Feiertag = geschlossen (False) wenn kein Eintrag.
+4. **Am Ende JEDER Sitzung — automatisch ohne Aufforderung:**
+   - CLAUDE.md aktualisieren (neue Erkenntnisse, TODO-Updates, Architekturentscheidungen)
+   - Alle Änderungen + CLAUDE.md committen und auf `master` pushen
+   - Git-Hash + Download-Link ausgeben: `https://github.com/dguertler/Allgemein/archive/refs/heads/master.zip`
+5. **Keine halben Implementierungen.** Zu große Tasks als TODO in Abschnitt 9 erfassen.
+6. **Keine Breaking Changes** an der additiven Effekt-Identität ohne Prüfung.
+7. **SQLite-Migrationen** immer in `_migrate()` in `schema.py` ergänzen.
+8. **Öffnungstage-Defaults:** Wochentag = offen (True), Feiertag = geschlossen (False).
+9. **fil_nr immer als str()** normieren wenn `ist_umsatz` und `planung` verglichen werden.
+10. **eff_norm:** In DB behalten, aber aus allen UI-Anzeigen ausblenden.
 
 ---
 
@@ -247,12 +390,12 @@ Navigation-Struktur (app.py):
 
 | Git-Hash | Beschreibung |
 |----------|-------------|
-| `4c3623f` | UX-Überarbeitung: Logos rechts oben (70px fixed), Sidebar Firma+Budgetjahr+Basiszeitraum, Firma-Captions entfernt, Auto-Speichern (Filialen/Öffnungstage/Feiertage), Planung: Basiszeitraum-Fix + Bestätigungsdialog + Bestandsfil.-pro-Monat + Fett-Summzeilen |
-| `93ce825` | Rolling base period, opening days (filial_oeffnung/feiertag), per-week vacation factors, additive Herleitung waterfall page, Lieferkunden removed |
-| `d036d04` | Auto holiday loader (all 16 Bundesländer + Fasching + Muttertag), monthly subtotals in Planungsgenauigkeit, multi-state holiday fix |
-| `1911096` | Logo CSS fix, IST/Abw columns always visible in Planungsgenauigkeit |
-| `632dd3c` | Filial validation on import, logo rounded corners, Planungsgenauigkeit overhaul |
-| `b2f229f` | Logo above nav (st.logo), import UX fix, planning without params, Planungsgenauigkeit page added |
-| `e107e37` | CLAUDE.md erstellt mit vollständigem Projektwissen |
-| `634a543` | WIP: Schema-Erweiterungen (geplanter_umsatz_monat, ferien_kalender, filial_schulferien) + Filialen inline edit |
-| `594f7cb` | Filialen inline edit + Delete-Bestätigung, Feiertage multi-Jahr (2023–2036) + Feiertagstage + Ramadan + Schulferien, Schulfilialen-Seite (neu), Preisanpassung-Seite (neu), Öffnungstage Default=geschlossen, Navigation restructure (Annahmen entfernt) |
+| `5588984` | Navigation: Öffnungstage nach Umsatz-Import, Feiertage+Schulfilialen zusammen |
+| `71a6199` | German placeholders, Filter-Persistenz, 0-Branch-Filter Herleitung, Norm. aus UI, IST fil_nr-Fix |
+| `d3a47e2` | Feiertagstag-Bug (art-Filter), Herleitung Tag-Ebene Datum+Wochentag+Tagesinfo, Planungsgenauigkeit Abw. fix |
+| `ceef823` | Filter-First-Layout, Zeilenauswahl-Detailpanel, DELETE-before-INSERT in save(), Brezel-Spinner |
+| `5472f92` | Logos zurück in Sidebar, zentrierter Loader, leere Tabellen-Fix, Herleitung Legende |
+| `4c3623f` | UX-Überarbeitung: Sidebar Firma+Budgetjahr+Basiszeitraum, Auto-Save, Planung-Fixes |
+| `93ce825` | Rolling Basiszeitraum, Öffnungstage, Per-Woche-Ferienfaktoren, additive Herleitung |
+| `d036d04` | Auto-Feiertag-Loader (16 BL + Fasching + Muttertag) |
+| `594f7cb` | Filialen Inline-Edit, Schulfilialen-Seite, Preisanpassung-Seite |
