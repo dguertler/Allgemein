@@ -112,10 +112,15 @@ if entity_ebene == "Filiale":
 elif entity_ebene == "Bundesland":
     group_keys = ["bundesland"] + group_keys
 
+# Budget nur für Tage zählen, an denen IST-Umsatz bereits importiert ist —
+# sonst ist die Abweichung in angebrochenen Monaten/Wochen irreführend.
+df["_budget_ist"] = df["Budget"].where(df["IST aktuell"].notna())
+
 agg = (df.groupby([k for k in group_keys if k != "_sort"], as_index=False)
        .agg({
            "IST Basis":    "sum",
            "Budget":       "sum",
+           "_budget_ist":  lambda x: x.sum() if x.notna().any() else None,
            "IST aktuell":  lambda x: x.sum() if x.notna().any() else None,
            "_sort":        "min",
        })
@@ -123,18 +128,19 @@ agg = (df.groupby([k for k in group_keys if k != "_sort"], as_index=False)
                                   else [group_keys[0], "_sort"])]))
 
 agg["Abw. €"] = agg.apply(
-    lambda x: round(float(x["IST aktuell"]) - float(x["Budget"]), 2)
-    if not pd.isna(x["IST aktuell"]) else None,
+    lambda x: round(float(x["IST aktuell"]) - float(x["_budget_ist"]), 2)
+    if not pd.isna(x["IST aktuell"]) and not pd.isna(x["_budget_ist"]) else None,
     axis=1,
 )
 agg["Abw. %"] = agg.apply(
-    lambda x: round(float(x["Abw. €"]) / float(x["Budget"]) * 100, 1)
-    if not pd.isna(x["Abw. €"]) and float(x["Budget"]) != 0 else None,
+    lambda x: round(float(x["Abw. €"]) / float(x["_budget_ist"]) * 100, 1)
+    if not pd.isna(x["Abw. €"]) and not pd.isna(x["_budget_ist"])
+    and float(x["_budget_ist"]) != 0 else None,
     axis=1,
 )
 
 rename = {"fil_nr": "Filiale", "bundesland": "Bundesland"}
-disp = agg.drop(columns=["_sort"]).rename(columns=rename)
+disp = agg.drop(columns=["_sort", "_budget_ist"]).rename(columns=rename)
 lead = [c for c in ["Filiale", "Bundesland", "Zeit"] if c in disp.columns]
 ordered = lead + ["IST Basis", "Budget", "IST aktuell", "Abw. €", "Abw. %"]
 disp = disp[[c for c in ordered if c in disp.columns]]
@@ -147,19 +153,31 @@ def _de(val) -> str:
 
 tot_basis  = agg["IST Basis"].sum()
 tot_bud    = agg["Budget"].sum()
+tot_bud_ist = agg["_budget_ist"].sum() if agg["_budget_ist"].notna().any() else None
 tot_ist    = agg["IST aktuell"].sum() if has_ist and agg["IST aktuell"].notna().any() else None
+
+ist_bis = df.loc[df["IST aktuell"].notna(), "datum_dt"].max() if has_ist else None
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("IST Basis", f"{_de(tot_basis)} €")
 m2.metric("Budget", f"{_de(tot_bud)} €")
-if tot_ist is not None:
-    abw_e = tot_ist - tot_bud
-    abw_p = abw_e / tot_bud * 100 if tot_bud != 0 else 0.0
+if tot_ist is not None and tot_bud_ist is not None:
+    abw_e = tot_ist - tot_bud_ist
+    abw_p = abw_e / tot_bud_ist * 100 if tot_bud_ist != 0 else 0.0
     m3.metric("IST aktuell", f"{_de(tot_ist)} €")
-    m4.metric("Abw. IST/Budget", f"{'+' if abw_e >= 0 else ''}{_de(abw_e)} € ({abw_p:+.1f} %)")
+    m4.metric("Abw. IST/Budget", f"{'+' if abw_e >= 0 else ''}{_de(abw_e)} € ({abw_p:+.1f} %)",
+              help=f"Verglichen wird nur das Budget der Tage mit importiertem IST-Umsatz "
+                   f"(Budget bis dahin: {_de(tot_bud_ist)} €).")
 else:
     m3.metric("IST aktuell", "– (noch kein Import)")
     m4.metric("Abw. IST/Budget", "–")
+
+if ist_bis is not None:
+    st.caption(
+        f"IST-Umsätze importiert bis **{ist_bis.strftime('%d.%m.%Y')}**. "
+        "Abweichungen (€/%) vergleichen IST nur mit dem Budget bis zu diesem Datum — "
+        "angebrochene Wochen/Monate werden anteilig gerechnet."
+    )
 
 st.divider()
 

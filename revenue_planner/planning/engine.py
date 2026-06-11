@@ -172,9 +172,22 @@ class PlanningEngine:
                  "art": r["art"] if r["art"] else "feiertag"}
             )
 
-        # Sondertage
+        # Sondertage (Legacy-Tabelle)
         rows = c.execute("SELECT datum_plan, datum_referenz, bezeichnung, methode, bundesland FROM sondertage").fetchall()
         self.sondertage: dict[str, dict] = {r["datum_plan"]: dict(r) for r in rows}
+        # Sondertage aus feiertage (art='Sondertag') — dort speichert die UI sie
+        for r in c.execute(
+            "SELECT datum_plan, datum_vj, name, bundesland FROM feiertage "
+            "WHERE LOWER(art)='sondertag'"
+        ).fetchall():
+            if r["datum_plan"] not in self.sondertage:
+                self.sondertage[r["datum_plan"]] = {
+                    "datum_plan": r["datum_plan"],
+                    "datum_referenz": r["datum_vj"],
+                    "bezeichnung": r["name"],
+                    "methode": "referenz",
+                    "bundesland": r["bundesland"],
+                }
 
         # Ferien Planjahr
         rows = c.execute("SELECT * FROM ferien").fetchall()
