@@ -493,7 +493,196 @@ class PlanningEngine:
 
     # ── Tagesplanung je Filiale ───────────────────────────────────────────
 
+    def _day_status(self, fil_nr: str, fil: dict, d: date, bl: str,
+                    wt_pct: dict[int, float]) -> dict:
+        """Fachlich: Tagesstatus bestimmen (Schritt 1 je Tag).
+
+        Klassifiziert einen Plantag als geschlossen/normal/feiertag/sondertag/
+        ferien anhand Eröffnungs-/Schließdatum der Filiale, Wochentags-Öffnung,
+        Feiertags-Öffnung sowie Ferienfenster des Bundeslands. Liefert das
+        Meta-Dict für die nachfolgenden Rechenschritte; "zaehlt_offen" gibt an,
+        ob der Tag in den share-Nenner (offene Wochentags-Vorkommen) eingeht.
+        """
+        iso = d.isoformat()
+        wt = d.weekday()
+        closed = False
+        tagestyp = "normal"
+        feiertag_name = ""
+        ferien_art = ""
+        ferien_woche = 0
+
+        eroeff = fil.get("eroeffnung")
+        ende = fil.get("eroeffnung_ende")
+        ft = self._relevant_feiertag(iso, bl)
+        st = self._relevant_sondertag(iso, bl)
+        fer = self._ferien_info_for_day(iso, bl)
+
+        if eroeff and date.fromisoformat(eroeff) > d:
+            closed = True
+        elif ende and date.fromisoformat(ende) < d:
+            closed = True
+        elif not self._is_open_weekday(fil_nr, wt):
+            closed = True
+        elif ft and not self._is_open_feiertag(fil_nr, ft["name"]):
+            closed = True
+            feiertag_name = ft["name"]
+
+        zaehlt_offen = False
+        if not closed:
+            if ft:
+                tagestyp = "feiertag"
+                feiertag_name = ft["name"]
+            elif st:
+                tagestyp = "sondertag"
+                feiertag_name = st["bezeichnung"]
+            elif fer:
+                tagestyp = "ferien"
+                ferien_art, ferien_woche = fer
+            if wt_pct.get(wt, 0) > 0 or tagestyp in ("feiertag", "sondertag"):
+                zaehlt_offen = True
+
+        return {
+            "d": d, "wt": wt, "closed": closed, "tagestyp": tagestyp,
+            "feiertag_name": feiertag_name, "ferien_art": ferien_art,
+            "ferien_woche": ferien_woche, "ft": ft, "st": st,
+            "zaehlt_offen": zaehlt_offen,
+        }
+
+    def _day_raw(self, fil_nr: str, bl: str, month: int, m: dict, growth: float,
+                 monat_basis: float, monat_hoch: float, monat_plan: float,
+                 share) -> dict:
+        """Fachlich: Roh-Tageswert + Ferien-/Feiertagseffekt (Schritt 2 je Tag).
+
+        Ermittelt ist_vj über das Datumsmapping (Fallback: gleicher Kalendertag
+        im Basisjahr) und berechnet je Tagestyp den unnormierten Tageswert:
+        - geschlossen: 0
+        - feiertag:    IST des Referenz-Feiertags × Wachstum (eff_feiertag)
+        - sondertag:   Samstags-Ø oder Referenztag × Wachstum (eff_feiertag)
+        - ferien:      Wochentags-Anteil × Ferienwochenfaktor (eff_ferien)
+        - normal:      Wochentags-Anteil des Monatsplans
+        tag_basis/tag_hoch/tag_plan tragen die additive Effektzerlegung
+        (Verteilung/Wochentagsmix/Preis) in den Build-Schritt.
+        """
+        d, wt = m["d"], m["wt"]
+        _day_iso = d.isoformat()
+        _mapping_base = (
+            self._datumsmapping.get((_day_iso, bl))
+            or self._datumsmapping.get((_day_iso, "alle"))
+        )
+        if _mapping_base:
+            _base_d = date.fromisoformat(_mapping_base)
+        else:
+            _base_d = _safe_date(self.base_year_for_month(month), month, d.day)
+        ist_vj = self._ist_on(fil_nr, _base_d)
+
+        if m["closed"]:
+            return {**m, "ist_vj": ist_vj, "tag_basis": 0.0, "tag_hoch": 0.0,
+                    "tag_plan": 0.0, "raw": 0.0, "eff_ferien": 0.0,
+                    "eff_feiertag": 0.0, "tagestyp": "geschlossen"}
+
+        sh = share(wt)
+        tag_basis = monat_basis * sh
+        tag_hoch = monat_hoch * sh
+        tag_plan = monat_plan * sh
+
+        eff_ferien = 0.0
+        eff_feiertag = 0.0
+        raw = tag_plan
+
+        if m["tagestyp"] == "feiertag":
+            ft = m["ft"]
+            ref = self._feiertag_base_date(ft, month)
+            vj_val = self._ist_on(fil_nr, ref)
+            raw = round(vj_val * growth, 2)
+            eff_feiertag = raw - tag_plan
+        elif m["tagestyp"] == "sondertag":
+            st = m["st"]
+            if st["methode"] == "samstag":
+                raw = round(self._saturday_avg(fil_nr) * growth, 2)
+            elif st["datum_referenz"]:
+                raw = round(self._ist_on(fil_nr, date.fromisoformat(st["datum_referenz"])) * growth, 2)
+            else:
+                raw = 0.0
+            eff_feiertag = raw - tag_plan
+        elif m["tagestyp"] == "ferien":
+            ff = self._ferien_faktor_woche(fil_nr, bl, m["ferien_art"], m["ferien_woche"])
+            raw = round(tag_plan * ff, 2)
+            eff_ferien = raw - tag_plan
+
+        return {**m, "ist_vj": ist_vj, "tag_basis": tag_basis, "tag_hoch": tag_hoch,
+                "tag_plan": tag_plan, "raw": raw, "eff_ferien": eff_ferien,
+                "eff_feiertag": eff_feiertag}
+
+    @staticmethod
+    def _normalize_month(rows: list[dict], monat_plan: float) -> float:
+        """Fachlich: Monatsnormierung (Schritt 3 je Monat).
+
+        Liefert den Faktor, mit dem alle Roh-Tageswerte skaliert werden, damit
+        die Summe der Tagesbudgets exakt monat_plan ergibt. Die Differenz je
+        Tag landet additiv in eff_norm (Identität bleibt exakt).
+        """
+        raw_sum = sum(r["raw"] for r in rows)
+        return (monat_plan / raw_sum) if raw_sum > 0 else 1.0
+
+    def _build_dayplan(self, fil_nr: str, bl: str, r: dict, norm: float,
+                       monat_basis: float, monat_hoch: float,
+                       monat_plan: float) -> DayPlan:
+        """Fachlich: DayPlan-Konstruktion inkl. Effektzerlegung (Schritt 4).
+
+        Geschlossene Tage: budget=0, eff_oeffnung = -ist_vj (Identität).
+        Offene Tage:  budget = raw × norm und additive Zerlegung
+            eff_verteilung = tag_basis - ist_vj   (Einzeltag → Wochentags-Ø)
+            eff_wochentag  = tag_hoch  - tag_basis (Wochentagsmix-Hochrechnung)
+            eff_preis      = tag_plan  - tag_hoch  (Wachstum/Preis)
+            eff_norm       = budget    - raw       (Normierungsrest)
+        eff_ferien/eff_feiertag kommen aus _day_raw.
+        """
+        if r["tagestyp"] == "geschlossen":
+            eff_oeffnung = -r["ist_vj"]
+            return DayPlan(
+                fil_nr=fil_nr, datum=r["d"], wochentag=r["wt"], bundesland=bl,
+                ist_vj=round(r["ist_vj"], 2),
+                eff_oeffnung=round(eff_oeffnung, 2), eff_verteilung=0.0,
+                eff_wochentag=0.0, eff_preis=0.0, eff_ferien=0.0,
+                eff_feiertag=0.0, eff_norm=0.0, budget=0.0,
+                monat_basis=round(monat_basis, 2), monat_hoch=round(monat_hoch, 2),
+                monat_plan=round(monat_plan, 2), tagestyp="geschlossen",
+                feiertag_name=r["feiertag_name"], ferien_art=r["ferien_art"],
+                normalisierung=round(norm, 4),
+            )
+
+        budget = round(r["raw"] * norm, 2)
+        eff_norm = budget - r["raw"]
+        eff_verteilung = r["tag_basis"] - r["ist_vj"]
+        eff_wochentag = r["tag_hoch"] - r["tag_basis"]
+        eff_preis = r["tag_plan"] - r["tag_hoch"]
+
+        return DayPlan(
+            fil_nr=fil_nr, datum=r["d"], wochentag=r["wt"], bundesland=bl,
+            ist_vj=round(r["ist_vj"], 2),
+            eff_oeffnung=0.0,
+            eff_verteilung=round(eff_verteilung, 2),
+            eff_wochentag=round(eff_wochentag, 2),
+            eff_preis=round(eff_preis, 2),
+            eff_ferien=round(r["eff_ferien"], 2),
+            eff_feiertag=round(r["eff_feiertag"], 2),
+            eff_norm=round(eff_norm, 2),
+            budget=budget,
+            monat_basis=round(monat_basis, 2), monat_hoch=round(monat_hoch, 2),
+            monat_plan=round(monat_plan, 2),
+            tagestyp=r["tagestyp"], feiertag_name=r["feiertag_name"],
+            ferien_art=r["ferien_art"], normalisierung=round(norm, 4),
+        )
+
     def plan_branch(self, fil_nr: str) -> list[DayPlan]:
+        """Orchestrator: Monate → Tage, ruft die modularen Rechenschritte.
+
+        Pipeline je Monat: _monat_werte → _day_status (alle Tage)
+        → share-Nenner → _day_raw (alle Tage) → _normalize_month
+        → _build_dayplan (alle Tage). Reines Verschieben von Code —
+        Berechnungen sind identisch zur monolithischen Vorversion
+        (abgesichert durch den Golden-Test).
+        """
         self._ferien_cache: dict[tuple, float] = {}
         fil = self.filialen.get(fil_nr, {"bundesland": "RP"})
         bl = _normalize_bl(fil.get("bundesland", "RP") or "RP")
@@ -506,157 +695,33 @@ class PlanningEngine:
             wt_pct = self._weekday_pct(fil_nr, month)
             dim = pd.Period(f"{py}-{month:02d}").days_in_month
 
-            # offene Wochentags-Counts im Planmonat (für share-Nenner)
+            # Schritt 1: Tagesstatus + offene Wochentags-Counts (share-Nenner)
             open_wt_count = {i: 0 for i in range(7)}
             day_meta = []
             for day in range(1, dim + 1):
-                d = date(py, month, day)
-                iso = d.isoformat()
-                wt = d.weekday()
-                # Öffnungsstatus bestimmen
-                closed = False
-                tagestyp = "normal"
-                feiertag_name = ""
-                ferien_art = ""
-                ferien_woche = 0
-
-                eroeff = fil.get("eroeffnung")
-                ende = fil.get("eroeffnung_ende")
-                ft = self._relevant_feiertag(iso, bl)
-                st = self._relevant_sondertag(iso, bl)
-                fer = self._ferien_info_for_day(iso, bl)
-
-                if eroeff and date.fromisoformat(eroeff) > d:
-                    closed = True
-                elif ende and date.fromisoformat(ende) < d:
-                    closed = True
-                elif not self._is_open_weekday(fil_nr, wt):
-                    closed = True
-                elif ft and not self._is_open_feiertag(fil_nr, ft["name"]):
-                    closed = True
-                    feiertag_name = ft["name"]
-
-                if not closed:
-                    if ft:
-                        tagestyp = "feiertag"
-                        feiertag_name = ft["name"]
-                    elif st:
-                        tagestyp = "sondertag"
-                        feiertag_name = st["bezeichnung"]
-                    elif fer:
-                        tagestyp = "ferien"
-                        ferien_art, ferien_woche = fer
-                    if wt_pct.get(wt, 0) > 0 or tagestyp in ("feiertag", "sondertag"):
-                        open_wt_count[wt] += 1
-
-                day_meta.append({
-                    "d": d, "wt": wt, "closed": closed, "tagestyp": tagestyp,
-                    "feiertag_name": feiertag_name, "ferien_art": ferien_art,
-                    "ferien_woche": ferien_woche, "ft": ft, "st": st,
-                })
+                m = self._day_status(fil_nr, fil, date(py, month, day), bl, wt_pct)
+                if m["zaehlt_offen"]:
+                    open_wt_count[m["wt"]] += 1
+                day_meta.append(m)
 
             # share-Nenner: offene Vorkommen je Wochentag (min 1)
             def share(wt: int) -> float:
                 n = open_wt_count.get(wt, 0)
                 return (wt_pct.get(wt, 0.0) / n) if n > 0 else 0.0
 
-            # raw-Werte berechnen
-            rows = []
-            for m in day_meta:
-                d, wt = m["d"], m["wt"]
-                _day_iso = d.isoformat()
-                _mapping_base = (
-                    self._datumsmapping.get((_day_iso, bl))
-                    or self._datumsmapping.get((_day_iso, "alle"))
-                )
-                if _mapping_base:
-                    _base_d = date.fromisoformat(_mapping_base)
-                else:
-                    _base_d = _safe_date(self.base_year_for_month(month), month, d.day)
-                ist_vj = self._ist_on(fil_nr, _base_d)
+            # Schritt 2: raw-Werte je Tag
+            rows = [self._day_raw(fil_nr, bl, month, m, growth,
+                                  monat_basis, monat_hoch, monat_plan, share)
+                    for m in day_meta]
 
-                if m["closed"]:
-                    rows.append({**m, "ist_vj": ist_vj, "tag_basis": 0.0, "tag_hoch": 0.0,
-                                 "tag_plan": 0.0, "raw": 0.0, "eff_ferien": 0.0,
-                                 "eff_feiertag": 0.0, "tagestyp": "geschlossen"})
-                    continue
+            # Schritt 3: Normierung auf monat_plan (nur offene Tage)
+            norm = self._normalize_month(rows, monat_plan)
 
-                sh = share(wt)
-                tag_basis = monat_basis * sh
-                tag_hoch = monat_hoch * sh
-                tag_plan = monat_plan * sh
-
-                eff_ferien = 0.0
-                eff_feiertag = 0.0
-                raw = tag_plan
-
-                if m["tagestyp"] == "feiertag":
-                    ft = m["ft"]
-                    ref = self._feiertag_base_date(ft, month)
-                    vj_val = self._ist_on(fil_nr, ref)
-                    raw = round(vj_val * growth, 2)
-                    eff_feiertag = raw - tag_plan
-                elif m["tagestyp"] == "sondertag":
-                    st = m["st"]
-                    if st["methode"] == "samstag":
-                        raw = round(self._saturday_avg(fil_nr) * growth, 2)
-                    elif st["datum_referenz"]:
-                        raw = round(self._ist_on(fil_nr, date.fromisoformat(st["datum_referenz"])) * growth, 2)
-                    else:
-                        raw = 0.0
-                    eff_feiertag = raw - tag_plan
-                elif m["tagestyp"] == "ferien":
-                    ff = self._ferien_faktor_woche(fil_nr, bl, m["ferien_art"], m["ferien_woche"])
-                    raw = round(tag_plan * ff, 2)
-                    eff_ferien = raw - tag_plan
-
-                rows.append({**m, "ist_vj": ist_vj, "tag_basis": tag_basis, "tag_hoch": tag_hoch,
-                             "tag_plan": tag_plan, "raw": raw, "eff_ferien": eff_ferien,
-                             "eff_feiertag": eff_feiertag})
-
-            # Normalisierung auf monat_plan (nur offene Tage)
-            raw_sum = sum(r["raw"] for r in rows)
-            norm = (monat_plan / raw_sum) if raw_sum > 0 else 1.0
-
-            for r in rows:
-                if r["tagestyp"] == "geschlossen":
-                    budget = 0.0
-                    eff_oeffnung = -r["ist_vj"]
-                    results.append(DayPlan(
-                        fil_nr=fil_nr, datum=r["d"], wochentag=r["wt"], bundesland=bl,
-                        ist_vj=round(r["ist_vj"], 2),
-                        eff_oeffnung=round(eff_oeffnung, 2), eff_verteilung=0.0,
-                        eff_wochentag=0.0, eff_preis=0.0, eff_ferien=0.0,
-                        eff_feiertag=0.0, eff_norm=0.0, budget=0.0,
-                        monat_basis=round(monat_basis, 2), monat_hoch=round(monat_hoch, 2),
-                        monat_plan=round(monat_plan, 2), tagestyp="geschlossen",
-                        feiertag_name=r["feiertag_name"], ferien_art=r["ferien_art"],
-                        normalisierung=round(norm, 4),
-                    ))
-                    continue
-
-                budget = round(r["raw"] * norm, 2)
-                eff_norm = budget - r["raw"]
-                eff_verteilung = r["tag_basis"] - r["ist_vj"]
-                eff_wochentag = r["tag_hoch"] - r["tag_basis"]
-                eff_preis = r["tag_plan"] - r["tag_hoch"]
-
-                results.append(DayPlan(
-                    fil_nr=fil_nr, datum=r["d"], wochentag=r["wt"], bundesland=bl,
-                    ist_vj=round(r["ist_vj"], 2),
-                    eff_oeffnung=0.0,
-                    eff_verteilung=round(eff_verteilung, 2),
-                    eff_wochentag=round(eff_wochentag, 2),
-                    eff_preis=round(eff_preis, 2),
-                    eff_ferien=round(r["eff_ferien"], 2),
-                    eff_feiertag=round(r["eff_feiertag"], 2),
-                    eff_norm=round(eff_norm, 2),
-                    budget=budget,
-                    monat_basis=round(monat_basis, 2), monat_hoch=round(monat_hoch, 2),
-                    monat_plan=round(monat_plan, 2),
-                    tagestyp=r["tagestyp"], feiertag_name=r["feiertag_name"],
-                    ferien_art=r["ferien_art"], normalisierung=round(norm, 4),
-                ))
+            # Schritt 4: DayPlan-Konstruktion
+            results.extend(
+                self._build_dayplan(fil_nr, bl, r, norm,
+                                    monat_basis, monat_hoch, monat_plan)
+                for r in rows)
 
         return results
 
