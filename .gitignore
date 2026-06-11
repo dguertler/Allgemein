@@ -13,3 +13,6 @@ venv/
 dist/
 build/
 .DS_Store
+__pycache__/
+*.pyc
+.pytest_cache/
