@@ -38,6 +38,7 @@ revenue_planner/
 │   └── importer.py                 # IST-Import, detect_oeffnungstage, ensure_filialen_from_ist
 ├── planning/
 │   ├── engine.py                   # Kern-Planungslogik (PlanningEngine, PlanParams, DayPlan)
+│   ├── datumsmapping.py            # Generator für datumsmapping-Tabelle (wochentagsbasiertes Matching)
 │   └── export.py                   # Excel-Export der Planung
 └── ui/
     ├── session.py                  # get_conn(), get_gmbh(), require_db(), get_budgetjahr()
@@ -54,7 +55,8 @@ revenue_planner/
         ├── 9_Oeffnungstage.py      # Wochentags- und Feiertags-Öffnung je Filiale
         ├── 10_Herleitung.py        # Additive Effektzerlegung / Wasserfall-Analyse
         ├── 11_Preisanpassung.py    # Monatliche Preisanpassung % je Planjahr
-        └── 12_Schulfilialen.py     # Auto-Erkennung + Matrix-Editor Schulferien
+        ├── 12_Schulfilialen.py     # Auto-Erkennung + Matrix-Editor Schulferien
+        └── 13_Datumsmapping.py     # Datumsmapping generieren + anzeigen
 ```
 
 ---
@@ -310,7 +312,7 @@ CSS in `app.py` zeigt spinning 🥨 Brezel + "Loading..." Text:
 
 ## 9. Offene Punkte (TODO)
 
-### 9.1 Datumsmapping (HOHE PRIORITÄT — nächste Sitzung)
+### 9.1 Datumsmapping (IMPLEMENTIERT)
 
 **Konzept:** Statt `_safe_date(base_year, month, day)` (gleicher Kalendertag) ein
 wochentagsbasiertes Mapping erstellen, das für jeden Plantag den korrekten
@@ -390,6 +392,7 @@ holidays-Lib unterstützt SCHOOL für DE nicht. Nur manuelle Eingabe.
 
 | Git-Hash | Beschreibung |
 |----------|-------------|
+| `TBD`     | Datumsmapping implementiert (wochentagsbasiertes Basis-Referenz-Matching), Logo-Größe verdoppelt |
 | `5588984` | Navigation: Öffnungstage nach Umsatz-Import, Feiertage+Schulfilialen zusammen |
 | `71a6199` | German placeholders, Filter-Persistenz, 0-Branch-Filter Herleitung, Norm. aus UI, IST fil_nr-Fix |
 | `d3a47e2` | Feiertagstag-Bug (art-Filter), Herleitung Tag-Ebene Datum+Wochentag+Tagesinfo, Planungsgenauigkeit Abw. fix |

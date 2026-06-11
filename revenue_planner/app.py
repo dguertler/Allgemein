@@ -31,7 +31,7 @@ def _logo_tag(path: Path, width: int = 65) -> str:
     )
 
 
-def _combined_logo_bytes(paths: list, height: int = 44) -> bytes | None:
+def _combined_logo_bytes(paths: list, height: int = 88) -> bytes | None:
     """Build a combined PNG for st.logo() – plain white background, no transparency."""
     try:
         from PIL import Image
@@ -69,10 +69,16 @@ if _logo_bytes:
     st.markdown("""
 <style>
 [data-testid="stSidebarHeader"] img {
+    height: 80px !important;
+    width: auto !important;
+    max-width: 100% !important;
     background: #ffffff !important;
     padding: 4px 6px !important;
     border-radius: 5px !important;
     object-fit: contain !important;
+}
+[data-testid="stSidebarHeader"] {
+    padding-bottom: 8px !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -105,6 +111,8 @@ pages = st.navigation({
                 title="Öffnungstage",           icon=":material/calendar_month:"),
         st.Page(str(BASE / "ui/pages/12_Schulfilialen.py"),
                 title="Schulfilialen",           icon=":material/school:"),
+        st.Page(str(BASE / "ui/pages/13_Datumsmapping.py"),
+                title="Datumsmapping",               icon=":material/calendar_view_day:"),
         st.Page(str(BASE / "ui/pages/11_Preisanpassung.py"),
                 title="Preisanpassung je Monat", icon=":material/trending_up:"),
     ],

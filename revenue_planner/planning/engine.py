@@ -200,6 +200,14 @@ class PlanningEngine:
         # Obergrenze (exklusiv) des Basisfensters für schnelle Maskierung
         self.base_mask_end = self._next_month(self.base_end_year, self.base_end_month)
 
+        # Datumsmapping: {(plan_datum, bundesland) → base_datum_str}
+        dm_rows = c.execute(
+            "SELECT plan_datum, base_datum, bundesland FROM datumsmapping"
+        ).fetchall()
+        self._datumsmapping: dict[tuple, str] = {
+            (r["plan_datum"], r["bundesland"]): r["base_datum"] for r in dm_rows
+        }
+
     @staticmethod
     def _next_month(year: int, month: int) -> pd.Timestamp:
         if month == 12:
@@ -503,7 +511,15 @@ class PlanningEngine:
             rows = []
             for m in day_meta:
                 d, wt = m["d"], m["wt"]
-                ist_vj = self._ist_on(fil_nr, _safe_date(self.base_year_for_month(month), month, d.day))
+                _mapping_base = (
+                    self._datumsmapping.get((iso, bl))
+                    or self._datumsmapping.get((iso, "alle"))
+                )
+                if _mapping_base:
+                    _base_d = date.fromisoformat(_mapping_base)
+                else:
+                    _base_d = _safe_date(self.base_year_for_month(month), month, d.day)
+                ist_vj = self._ist_on(fil_nr, _base_d)
 
                 if m["closed"]:
                     rows.append({**m, "ist_vj": ist_vj, "tag_basis": 0.0, "tag_hoch": 0.0,
