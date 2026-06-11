@@ -16,7 +16,7 @@ st.caption(f"Firma: **{get_gmbh()}**")
 st.markdown("""
 Aus den importierten Umsätzen wird automatisch erkannt, an welchen **Wochentagen**
 und **Feiertagen** jede Filiale im Basiszeitraum geöffnet hatte. Diese Werte gelten
-fürs Budgetjahr und können hier angepasst werden.
+fürs Budgetjahr und können hier angepasst werden. Änderungen werden automatisch gespeichert.
 
 Die **automatische Erkennung** läuft direkt nach dem Umsatz-Import.
 Der Button unten ist nützlich, wenn Filialen nachträglich angelegt wurden oder
@@ -59,10 +59,10 @@ with tab1:
         for wt in range(7):
             row[WT[wt]] = bool(oeff.get((f["fil_nr"], wt), False))
         data.append(row)
-    df = pd.DataFrame(data)
+    df_orig = pd.DataFrame(data)
 
     edited = st.data_editor(
-        df, use_container_width=True, hide_index=True,
+        df_orig, use_container_width=True, hide_index=True,
         disabled=["Filiale", "Bezeichnung"],
         column_config={
             "Filiale":     st.column_config.TextColumn(width=80),
@@ -72,7 +72,7 @@ with tab1:
         key="oeff_editor",
     )
 
-    if st.button("\U0001f4be Wochentage speichern", type="primary"):
+    if not df_orig.astype(str).equals(edited.astype(str)):
         for _, row in edited.iterrows():
             for wt in range(7):
                 conn.execute(
@@ -80,7 +80,7 @@ with tab1:
                     (row["Filiale"], wt, int(bool(row[WT[wt]]))),
                 )
         conn.commit()
-        st.success("✅ Gespeichert.")
+        st.toast("✅ Wochentage gespeichert")
         st.rerun()
 
 # ── Tab 2: Holiday opening (per branch) ───────────────────────────────────
@@ -103,22 +103,22 @@ with tab2:
 
         rows = [{"Feiertag": ft["name"], "Offen": existing.get(ft["name"], False)}
                 for ft in feiertage]
-        df_ft = pd.DataFrame(rows)
+        df_ft_orig = pd.DataFrame(rows)
 
         edited_ft = st.data_editor(
-            df_ft, use_container_width=True, hide_index=True,
+            df_ft_orig, use_container_width=True, hide_index=True,
             disabled=["Feiertag"],
             column_config={"Offen": st.column_config.CheckboxColumn("Offen", width=70)},
             key=f"ft_editor_{sel}",
             height=400,
         )
 
-        if st.button("\U0001f4be Feiertags-Öffnung speichern", type="primary"):
+        if not df_ft_orig.astype(str).equals(edited_ft.astype(str)):
             for _, row in edited_ft.iterrows():
                 conn.execute(
                     "INSERT OR REPLACE INTO filial_feiertag (fil_nr, feiertag_name, offen) VALUES (?,?,?)",
                     (sel, row["Feiertag"], int(bool(row["Offen"]))),
                 )
             conn.commit()
-            st.success("✅ Gespeichert.")
+            st.toast("✅ Feiertags-Öffnung gespeichert")
             st.rerun()

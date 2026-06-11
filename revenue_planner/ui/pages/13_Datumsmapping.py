@@ -1,4 +1,4 @@
-"""Datumsmapping — zeigt und generiert das Mapping Plantag → Basisreferenztag."""
+"""Datumsmapping — zeigt und generiert das Mapping Budgettag → Basistag."""
 import streamlit as st
 from pathlib import Path
 import sys
@@ -13,25 +13,30 @@ st.title("Datumsmapping")
 st.caption(f"Firma: **{get_gmbh()}**")
 
 st.info(
-    "Das Datumsmapping ordnet jedem Tag im Planjahr einen korrekten Referenztag "
+    "Das Datumsmapping ordnet jedem Budgettag im Planjahr einen korrekten Basistag "
     "im Basiszeitraum zu — wochentagsbasiert, mit Feiertags- und Feriensonderbehandlung. "
     "Es muss neu generiert werden, wenn Feiertage oder Ferien geändert wurden."
 )
 
 planjahr = get_budgetjahr()
 
+MAPPING_ART_LABELS = {
+    "feiertag": "Feiertag",
+    "ferien":   "Ferien",
+    "iso_kw":   "KW-Vergleich (gleicher Wochentag, gleiche Kalenderwoche im Basiszeitraum)",
+}
+
 col1, col2 = st.columns([2, 1])
 with col1:
-    st.subheader(f"Mapping für Planjahr {planjahr}")
+    st.subheader(f"Mapping für Budgetjahr {planjahr}")
 with col2:
     if st.button("🔄 Mapping generieren", type="primary", use_container_width=True):
         with st.spinner("Generiere Datumsmapping…"):
             try:
                 from planning.engine import PlanningEngine, PlanParams
-                from planning.datumsmapping import generate_datumsmapping
-                from ui.session import get_conn
 
-                # Load params from DB
+                from planning.datumsmapping import generate_datumsmapping
+
                 par_row = conn.execute(
                     "SELECT * FROM parameter WHERE planjahr = ?", (planjahr,)
                 ).fetchone()
@@ -51,12 +56,12 @@ with col2:
             except Exception as ex:
                 st.error(f"Fehler: {ex}")
 
-# Load existing mapping
+# ── Daten laden ──────────────────────────────────────────────────────────────
 df = pd.read_sql(
-    "SELECT plan_datum, base_datum, plan_typ, bundesland, mapping_art "
+    "SELECT plan_datum, base_datum, plan_typ, bundesland, mapping_art, bezeichnung "
     "FROM datumsmapping "
     "WHERE CAST(strftime('%Y', plan_datum) AS INTEGER) = ? "
-    "ORDER BY plan_datum, bundesland",
+    "ORDER BY bundesland, plan_datum",
     conn, params=(planjahr,)
 )
 
@@ -64,31 +69,53 @@ if df.empty:
     st.warning("Kein Mapping vorhanden. Bitte zuerst generieren.")
     st.stop()
 
-# Filters
+# ── Aufbereitungen ───────────────────────────────────────────────────────────
 WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+
 df["plan_datum_dt"] = pd.to_datetime(df["plan_datum"])
-df["plan_wt"] = df["plan_datum_dt"].dt.weekday.map(lambda x: WOCHENTAGE[x])
+df["plan_datum_de"] = df["plan_datum_dt"].dt.strftime("%d.%m.%Y")
+df["plan_wt"]       = df["plan_datum_dt"].dt.weekday.map(lambda x: WOCHENTAGE[x])
+
 df["base_datum_dt"] = pd.to_datetime(df["base_datum"])
-df["base_wt"] = df["base_datum_dt"].dt.weekday.map(lambda x: WOCHENTAGE[x])
-df["monat"] = df["plan_datum_dt"].dt.month
+df["base_datum_de"] = df["base_datum_dt"].dt.strftime("%d.%m.%Y")
+df["base_wt"]       = df["base_datum_dt"].dt.weekday.map(lambda x: WOCHENTAGE[x])
 
-MONATE_DE = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
-             "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
+df["monat"]         = df["plan_datum_dt"].dt.month
+df["mapping_art_label"] = df["mapping_art"].map(MAPPING_ART_LABELS).fillna(df["mapping_art"])
 
+MONATE_DE = ["Januar", "Februar", "März", "April", "Mai", "Juni",
+             "Juli", "August", "September", "Oktober", "November", "Dezember"]
+
+# ── Filter ───────────────────────────────────────────────────────────────────
 fc1, fc2, fc3 = st.columns(3)
 with fc1:
     monat_opts = sorted(df["monat"].unique().tolist())
     monat_sel = st.multiselect(
-        "Monat", options=monat_opts,
+        "Monat",
+        options=monat_opts,
         format_func=lambda m: MONATE_DE[m - 1],
-        key="datumsmapping_monat"
+        placeholder="Alle Monate",
+        key="datumsmapping_monat",
     )
 with fc2:
     bl_opts = sorted(df["bundesland"].unique().tolist())
-    bl_sel = st.multiselect("Bundesland", options=bl_opts, key="datumsmapping_bl")
+    bl_sel = st.multiselect(
+        "Bundesland",
+        options=bl_opts,
+        placeholder="Alle Bundesländer",
+        key="datumsmapping_bl",
+    )
 with fc3:
-    typ_opts = sorted(df["plan_typ"].unique().tolist())
-    typ_sel = st.multiselect("Typ", options=typ_opts, key="datumsmapping_typ")
+    # Typ-Filter: zeige deutschen Label
+    typ_raw_opts = sorted(df["plan_typ"].unique().tolist())
+    TYP_LABELS = {"feiertag": "Feiertag", "ferien": "Ferien", "normal": "Normaltag"}
+    typ_sel = st.multiselect(
+        "Typ",
+        options=typ_raw_opts,
+        format_func=lambda t: TYP_LABELS.get(t, t),
+        placeholder="Alle Typen",
+        key="datumsmapping_typ",
+    )
 
 view = df.copy()
 if monat_sel:
@@ -98,8 +125,22 @@ if bl_sel:
 if typ_sel:
     view = view[view["plan_typ"].isin(typ_sel)]
 
-display = view[["plan_datum", "plan_wt", "plan_typ", "base_datum", "base_wt", "bundesland", "mapping_art"]].copy()
-display.columns = ["Plantag", "WT Plan", "Typ Plan", "Referenztag", "WT Ref", "Bundesland", "Mapping-Art"]
+# ── Anzeigetabelle ───────────────────────────────────────────────────────────
+display = view[[
+    "bundesland",
+    "plan_datum_de", "plan_wt", "bezeichnung", "mapping_art_label",
+    "base_datum_de", "base_wt", "bezeichnung",
+]].copy()
+display.columns = [
+    "Bundesland",
+    "Budgettag", "Wochentag", "Beschreibung Budget", "Mapping-Art",
+    "Basistag", "Wochentag ", "Beschreibung Basistag",
+]
 
 st.dataframe(display, use_container_width=True, hide_index=True, height=500)
-st.caption(f"{len(display):,} Zeilen angezeigt von {len(df):,} gesamt.")
+st.caption(
+    f"{len(display):,} Zeilen angezeigt von {len(df):,} gesamt.  "
+    "**Mapping-Art:** *Feiertag* = gleichnamiger Feiertag im Basiszeitraum; "
+    "*Ferien* = gleiche Ferienwoche im Basiszeitraum (wochentagsbasiert); "
+    "*KW-Vergleich* = gleicher Wochentag in derselben Kalenderwoche des Basiszeitraums."
+)

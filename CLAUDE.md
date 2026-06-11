@@ -386,6 +386,8 @@ holidays-Lib unterstützt SCHOOL für DE nicht. Nur manuelle Eingabe.
 8. **Öffnungstage-Defaults:** Wochentag = offen (True), Feiertag = geschlossen (False).
 9. **fil_nr immer als str()** normieren wenn `ist_umsatz` und `planung` verglichen werden.
 10. **eff_norm:** In DB behalten, aber aus allen UI-Anzeigen ausblenden.
+11. **Deutsches Datumsformat in der UI:** Datumsangaben immer als `DD.MM.YYYY` anzeigen (`.dt.strftime("%d.%m.%Y")`). Multiselect-Placeholders immer auf Deutsch (z.B. `placeholder="Alle Bundesländer"`). Keine englischen "Choose options" o.ä.
+12. **Keine Speichern-Buttons bei data_editor:** Immer Auto-Save via `if not orig.astype(str).equals(edited.astype(str)): save(); st.toast(); st.rerun()`.
 
 ---
 

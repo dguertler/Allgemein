@@ -180,6 +180,7 @@ CREATE TABLE IF NOT EXISTS datumsmapping (
     base_typ    TEXT,
     bundesland  TEXT NOT NULL DEFAULT 'alle',
     mapping_art TEXT NOT NULL DEFAULT 'iso_kw',
+    bezeichnung TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (plan_datum, bundesland)
 );
 
@@ -321,9 +322,13 @@ def _migrate(conn: sqlite3.Connection):
             base_typ    TEXT,
             bundesland  TEXT NOT NULL DEFAULT 'alle',
             mapping_art TEXT NOT NULL DEFAULT 'iso_kw',
+            bezeichnung TEXT NOT NULL DEFAULT '',
             PRIMARY KEY (plan_datum, bundesland)
         )
     """)
+    dm_cols = {row[1] for row in conn.execute("PRAGMA table_info(datumsmapping)").fetchall()}
+    if "bezeichnung" not in dm_cols:
+        conn.execute("ALTER TABLE datumsmapping ADD COLUMN bezeichnung TEXT NOT NULL DEFAULT ''")
 
     plan_cols = {row[1] for row in conn.execute("PRAGMA table_info(planung)").fetchall()}
     for col in ["bundesland", "eff_oeffnung", "eff_verteilung", "eff_wochentag",

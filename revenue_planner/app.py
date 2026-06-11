@@ -11,6 +11,7 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
+    menu_items={},
 )
 
 ASSETS = BASE / "ui" / "assets"
@@ -68,6 +69,13 @@ if _logo_bytes:
     st.logo(_logo_bytes, size="large")
     st.markdown("""
 <style>
+/* Logo-Bereich: gleiches Padding links wie oben */
+[data-testid="stSidebarHeader"] {
+    padding-top: 1rem !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+    padding-bottom: 0.5rem !important;
+}
 [data-testid="stSidebarHeader"] img {
     height: 80px !important;
     width: auto !important;
@@ -76,9 +84,13 @@ if _logo_bytes:
     padding: 4px 6px !important;
     border-radius: 5px !important;
     object-fit: contain !important;
+    margin-left: 0 !important;
 }
-[data-testid="stSidebarHeader"] {
-    padding-bottom: 8px !important;
+/* Sidebar-Einklapp-Button ausblenden */
+[data-testid="stSidebarCollapseButton"],
+button[aria-label="Close sidebar"],
+button[aria-label="Collapse sidebar"] {
+    display: none !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -93,6 +105,32 @@ else:
                 unsafe_allow_html=True,
             )
             st.divider()
+
+# ── Sidebar: Firma / Budgetjahr / Basiszeitraum ────────────────────────────
+from ui.session import get_gmbh as _get_gmbh, get_budgetjahr as _get_bj
+
+_gmbh = _get_gmbh()
+_bj   = _get_bj()
+
+with st.sidebar:
+    if _gmbh:
+        from datetime import date as _date, timedelta as _td
+        _stichtag = _date(_bj, 1, 1) if _bj <= _date.today().year else _date.today()
+        _lc = _stichtag.replace(day=1) - _td(days=1)
+        _m, _y = _lc.month, _lc.year
+        _ms = _m - 11
+        _ys = _y
+        while _ms <= 0:
+            _ms += 12
+            _ys -= 1
+        _mon = ["Jan","Feb","Mär","Apr","Mai","Jun","Jul","Aug","Sep","Okt","Nov","Dez"]
+        _basis_label = f"{_mon[_ms-1]} {_ys} – {_mon[_m-1]} {_y}"
+        st.markdown(
+            f"**Firma:** {_gmbh}  \n"
+            f"**Budgetjahr:** {_bj}  \n"
+            f"**Basiszeitraum:** {_basis_label}"
+        )
+        st.divider()
 
 # ── Navigation ─────────────────────────────────────────────────────────────
 pages = st.navigation({

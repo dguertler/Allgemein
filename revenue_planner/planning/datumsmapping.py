@@ -73,7 +73,7 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                         base_d = _safe_date(by, month, day) or plan_d
                     rows.append((
                         iso, base_d.isoformat(),
-                        "feiertag", "feiertag", bl, "feiertag"
+                        "feiertag", "feiertag", bl, "feiertag", ft["name"]
                     ))
                     continue
 
@@ -95,7 +95,7 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                         base_d = max(vj_start, min(base_d, vj_ende))
                         rows.append((
                             iso, base_d.isoformat(),
-                            "ferien", "ferien", bl, "ferien"
+                            "ferien", "ferien", bl, "ferien", art
                         ))
                         continue
 
@@ -103,7 +103,7 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                 base_d = _date_from_iso_week(by, iso_week, wt)
                 rows.append((
                     iso, base_d.isoformat(),
-                    "normal", "normal", bl, "iso_kw"
+                    "normal", "normal", bl, "iso_kw", ""
                 ))
 
     # Repopulate
@@ -113,8 +113,8 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
     )
     conn.executemany(
         """INSERT OR REPLACE INTO datumsmapping
-           (plan_datum, base_datum, plan_typ, base_typ, bundesland, mapping_art)
-           VALUES (?, ?, ?, ?, ?, ?)""",
+           (plan_datum, base_datum, plan_typ, base_typ, bundesland, mapping_art, bezeichnung)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
         rows,
     )
     conn.commit()
