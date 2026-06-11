@@ -392,7 +392,7 @@ holidays-Lib unterstützt SCHOOL für DE nicht. Nur manuelle Eingabe.
 
 | Git-Hash | Beschreibung |
 |----------|-------------|
-| `TBD`     | Datumsmapping implementiert (wochentagsbasiertes Basis-Referenz-Matching), Logo-Größe verdoppelt |
+| `84d0ebe` | Datumsmapping implementiert (wochentagsbasiertes Basis-Referenz-Matching), Logo-Größe verdoppelt |
 | `5588984` | Navigation: Öffnungstage nach Umsatz-Import, Feiertage+Schulfilialen zusammen |
 | `71a6199` | German placeholders, Filter-Persistenz, 0-Branch-Filter Herleitung, Norm. aus UI, IST fil_nr-Fix |
 | `d3a47e2` | Feiertagstag-Bug (art-Filter), Herleitung Tag-Ebene Datum+Wochentag+Tagesinfo, Planungsgenauigkeit Abw. fix |

@@ -511,9 +511,10 @@ class PlanningEngine:
             rows = []
             for m in day_meta:
                 d, wt = m["d"], m["wt"]
+                _day_iso = d.isoformat()
                 _mapping_base = (
-                    self._datumsmapping.get((iso, bl))
-                    or self._datumsmapping.get((iso, "alle"))
+                    self._datumsmapping.get((_day_iso, bl))
+                    or self._datumsmapping.get((_day_iso, "alle"))
                 )
                 if _mapping_base:
                     _base_d = date.fromisoformat(_mapping_base)
