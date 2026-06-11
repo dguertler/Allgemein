@@ -11,7 +11,6 @@ import pandas as pd
 require_db()
 conn = get_conn()
 st.title("IST-Umsätze importieren")
-st.caption(f"Firma: **{get_gmbh()}**")
 
 st.markdown("""
 Erwartet eine Datei mit mindestens drei Spalten:

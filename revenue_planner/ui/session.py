@@ -30,3 +30,12 @@ def require_db():
     if not get_conn():
         st.warning("Bitte zuerst eine GmbH-Datenbank öffnen oder anlegen (Startseite).")
         st.stop()
+
+
+def get_budgetjahr() -> int:
+    from datetime import date
+    return st.session_state.get("budgetjahr", date.today().year + 1)
+
+
+def set_budgetjahr(year: int):
+    st.session_state["budgetjahr"] = int(year)
