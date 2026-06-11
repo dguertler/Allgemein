@@ -7,9 +7,9 @@
 
 > **Pflicht am Ende JEDER Sitzung (automatisch, ohne Aufforderung):**
 > 1. CLAUDE.md mit allen Änderungen, neuen Erkenntnissen und TODO-Updates aktualisieren
-> 2. Alle Änderungen committen und auf `master` pushen
-> 3. Git-Hash-Zusammenfassung + Download-Link ausgeben:
->    `https://github.com/dguertler/Allgemein/archive/refs/heads/master.zip`
+> 2. Alle Änderungen + CLAUDE.md committen und auf `master` pushen
+> 3. **Dem Nutzer eine Zusammenfassung der Sitzungsänderungen ausgeben** (was wurde umgesetzt, welche Dateien geändert, offene Punkte)
+> 4. **Download-Link ausgeben:** `https://github.com/dguertler/Allgemein/archive/refs/heads/master.zip`
 
 ---
 
@@ -220,6 +220,7 @@ Berechnung & Validierung:
 | Öffnungstage | 9_Oeffnungstage.py | Wochentag + Feiertag je Filiale, Auto-Save |
 | Feiertage laden | 8_Feiertage_Import.py | Multi-Jahr 2023–2036, editierbar, Auto-Save |
 | Schulfilialen | 12_Schulfilialen.py | ≥80% Nullumsatz = Schulfiliale, Matrix-Editor |
+| Datumsmapping | 13_Datumsmapping.py | Mapping Plantag→Referenztag generieren + prüfen |
 | Preisanpassung | 11_Preisanpassung.py | Wachstum % je Monat + Planjahr |
 | Planung ausführen | 6_Planung.py | Berechnung, Bestätigungsdialog, Excel-Export |
 | Herleitung | 10_Herleitung.py | Additive Effekte, Zeilenauswahl-Detailpanel |
@@ -392,6 +393,7 @@ holidays-Lib unterstützt SCHOOL für DE nicht. Nur manuelle Eingabe.
 
 | Git-Hash | Beschreibung |
 |----------|-------------|
+| `071ae5d` | Bugfix: ISO-String-Variable im plan_branch-Inner-Loop korrigiert (zeigte auf letzten Monatstag) |
 | `84d0ebe` | Datumsmapping implementiert (wochentagsbasiertes Basis-Referenz-Matching), Logo-Größe verdoppelt |
 | `5588984` | Navigation: Öffnungstage nach Umsatz-Import, Feiertage+Schulfilialen zusammen |
 | `71a6199` | German placeholders, Filter-Persistenz, 0-Branch-Filter Herleitung, Norm. aus UI, IST fil_nr-Fix |
