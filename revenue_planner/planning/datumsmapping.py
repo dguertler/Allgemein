@@ -95,6 +95,7 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                     if ft_tag:
                         plan_typ = "feiertagstag"
                         bezeichnung_parts.append("Feiertagstag")
+                        base_bezeichnung_parts.append("Feiertagstag")
                         # Feiertagstage werden wie normale Tage behandelt → ISO-KW Basis
 
                 # 3. Sondertag

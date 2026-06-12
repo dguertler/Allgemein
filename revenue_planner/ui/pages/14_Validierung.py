@@ -130,6 +130,125 @@ add("warn" if n_fer == 0 else "ok",
     None,
     "0 Ferienperioden → Ferienkalender pflegen (sofern relevant)." if n_fer == 0 else "")
 
+# 6b) Vergleich Feiertage/Sondertage/Ferientage: Budgetjahr vs. Basiszeitraum
+base_start_str = engine.base_start.isoformat()
+base_end_str   = (engine.base_mask_end.date() - timedelta(days=1)).isoformat()
+plan_start_str = f"{planjahr}-01-01"
+plan_end_str   = f"{planjahr}-12-31"
+
+# Feiertage (art='feiertag', ohne Feiertagstage)
+ft_base = conn.execute(
+    "SELECT bundesland, COUNT(*) AS n FROM feiertage "
+    "WHERE LOWER(art)='feiertag' AND datum_plan >= ? AND datum_plan <= ? "
+    "GROUP BY bundesland ORDER BY bundesland",
+    (base_start_str, base_end_str)
+).fetchall()
+ft_plan = conn.execute(
+    "SELECT bundesland, COUNT(*) AS n FROM feiertage "
+    "WHERE LOWER(art)='feiertag' AND datum_plan >= ? AND datum_plan <= ? "
+    "GROUP BY bundesland ORDER BY bundesland",
+    (plan_start_str, plan_end_str)
+).fetchall()
+
+def _ft_dict(rows) -> dict[str, int]:
+    return {r["bundesland"]: r["n"] for r in rows}
+
+ft_base_d = _ft_dict(ft_base)
+ft_plan_d = _ft_dict(ft_plan)
+all_bl_ft = sorted(set(ft_base_d) | set(ft_plan_d))
+ft_compare_rows = []
+for bl in all_bl_ft:
+    b, p = ft_base_d.get(bl, 0), ft_plan_d.get(bl, 0)
+    diff = p - b
+    status_flag = "⚠️" if diff != 0 else "✅"
+    ft_compare_rows.append({
+        "Bundesland": bl, f"Basiszeitraum ({engine.base_window_label()})": b,
+        f"Budgetjahr {planjahr}": p, "Differenz": diff, "Status": status_flag
+    })
+ft_compare_df = pd.DataFrame(ft_compare_rows)
+has_ft_diff = any(r["Differenz"] != 0 for r in ft_compare_rows)
+add("warn" if has_ft_diff else "ok",
+    "Feiertage je Bundesland: Basiszeitraum vs. Budgetjahr",
+    ft_compare_df if not ft_compare_df.empty else None,
+    "Unterschiedliche Anzahl Feiertage können Budget-Effekte erklären (z.B. Brückentage).")
+
+# Sondertage
+n_st_base = conn.execute(
+    "SELECT COUNT(*) AS n FROM sondertage WHERE datum_plan >= ? AND datum_plan <= ?",
+    (base_start_str, base_end_str)
+).fetchone()["n"]
+n_st_plan = conn.execute(
+    "SELECT COUNT(*) AS n FROM sondertage WHERE datum_plan >= ? AND datum_plan <= ?",
+    (plan_start_str, plan_end_str)
+).fetchone()["n"]
+st_rows_base = conn.execute(
+    "SELECT datum_plan, bezeichnung, bundesland FROM sondertage "
+    "WHERE datum_plan >= ? AND datum_plan <= ? ORDER BY datum_plan",
+    (base_start_str, base_end_str)
+).fetchall()
+st_rows_plan = conn.execute(
+    "SELECT datum_plan, bezeichnung, bundesland FROM sondertage "
+    "WHERE datum_plan >= ? AND datum_plan <= ? ORDER BY datum_plan",
+    (plan_start_str, plan_end_str)
+).fetchall()
+st_diff = n_st_plan - n_st_base
+st_detail = pd.DataFrame(
+    [{"Zeitraum": "Basiszeitraum", "Datum": r["datum_plan"],
+      "Beschreibung": r["bezeichnung"], "Bundesland": r["bundesland"]}
+     for r in st_rows_base] +
+    [{"Zeitraum": f"Budgetjahr {planjahr}", "Datum": r["datum_plan"],
+      "Beschreibung": r["bezeichnung"], "Bundesland": r["bundesland"]}
+     for r in st_rows_plan]
+)
+add("warn" if st_diff != 0 else "ok",
+    f"Sondertage: Basiszeitraum {n_st_base}, Budgetjahr {n_st_plan} (Differenz: {st_diff:+d})",
+    st_detail if not st_detail.empty else None,
+    "Unterschiedliche Sondertage-Anzahl beeinflussen den Sondertags-Effekt in der Planung.")
+
+# Ferientage (Schulferien — Tage aus ferien_kalender)
+fer_base = conn.execute(
+    "SELECT bundesland, art, start, ende FROM ferien_kalender "
+    "WHERE start <= ? AND ende >= ?",
+    (base_end_str, base_start_str)
+).fetchall()
+fer_plan_all = conn.execute(
+    "SELECT bundesland, art, start, ende FROM ferien_kalender "
+    "WHERE start <= ? AND ende >= ?",
+    (plan_end_str, plan_start_str)
+).fetchall()
+
+def _count_days(rows, yr_start, yr_end) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for r in rows:
+        bl, art = r["bundesland"], r["art"]
+        s = max(date.fromisoformat(r["start"]), date.fromisoformat(yr_start))
+        e = min(date.fromisoformat(r["ende"]), date.fromisoformat(yr_end))
+        days = max(0, (e - s).days + 1)
+        key = f"{bl} – {art}"
+        counts[key] = counts.get(key, 0) + days
+    return counts
+
+fer_base_counts = _count_days(fer_base, base_start_str, base_end_str)
+fer_plan_counts = _count_days(fer_plan_all, plan_start_str, plan_end_str)
+all_fer_keys = sorted(set(fer_base_counts) | set(fer_plan_counts))
+fer_compare_rows = []
+for key in all_fer_keys:
+    b, p = fer_base_counts.get(key, 0), fer_plan_counts.get(key, 0)
+    diff = p - b
+    flag = "⚠️" if diff != 0 else "✅"
+    fer_compare_rows.append({
+        "Bundesland – Ferienart": key,
+        f"Basiszeitraum ({engine.base_window_label()}) Tage": b,
+        f"Budgetjahr {planjahr} Tage": p,
+        "Differenz Tage": diff, "Status": flag
+    })
+fer_df = pd.DataFrame(fer_compare_rows)
+has_fer_diff = any(r["Differenz Tage"] != 0 for r in fer_compare_rows)
+add("warn" if has_fer_diff else "ok",
+    "Schulferientage je Bundesland: Basiszeitraum vs. Budgetjahr",
+    fer_df if not fer_df.empty else None,
+    "Unterschiedliche Ferientage erklären den Ferieneffekt im Budget.")
+
 # 7) IST-Datenlücken: letztes IST-Datum > 35 Tage vor Max-IST aller Filialen
 max_all_row = conn.execute("SELECT MAX(datum) AS d FROM ist_umsatz").fetchone()
 stale = []
