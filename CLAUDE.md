@@ -506,6 +506,14 @@ Fixture: `tests/conftest.py` (`make_test_db`/`make_engine`), deterministische
 11. **Deutsches Datumsformat in der UI:** Datumsangaben immer als `DD.MM.YYYY` anzeigen (`.dt.strftime("%d.%m.%Y")` bzw. `DateColumn(format="DD.MM.YYYY")`). Multiselect-Placeholders immer auf Deutsch (z.B. `placeholder="Alle Bundesländer"`). Keine englischen "Choose options" o.ä.
 12. **Keine Speichern-Buttons bei data_editor:** Immer Auto-Save via Vergleich (Datums-Spalten vorher normalisieren!) + `st.toast()` + `st.rerun()`.
 13. **Bundesland-Vergleiche** immer über `_normalize_bl()` normalisieren.
+14. **DATENSCHUTZ — NIEMALS echte Betriebs- oder Filialdaten laden:**
+    Wenn im Repo `.db`-Dateien, CSV/Excel-Exporte oder andere Dateien mit echten
+    IST-Umsätzen, Filialdaten oder Personaldaten vorhanden sind, diese **NIEMALS**
+    mit `Read`, `Bash cat/head`, `pd.read_sql` o.ä. in den Kontext laden.
+    Nur Schema, Code und CLAUDE.md lesen. Datenbankabfragen ausschließlich zur
+    Strukturprüfung (z.B. `SELECT name FROM sqlite_master`) — keine `SELECT *`
+    oder Umsatz-/Filialdaten-Abfragen auf echten DBs. Produktionsdaten haben im
+    Kontext von Claude nichts zu suchen.
 
 ---
 
