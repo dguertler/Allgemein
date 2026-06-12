@@ -411,12 +411,15 @@ CSS in `app.py` zeigt spinning 🥨 Brezel + "Loading..." Text:
 - **Fasching:** 6 Tage ab Weiberfastnacht (Ostern-52)
 - **Muttertag:** 2. Sonntag im Mai
 - **Ramadan:** Hardcoded-Dict 2023–2036
-- **Schulferien:** manuelle Eingabe in `ferien_kalender`-Tabelle (holidays-Lib
-  unterstützt SCHOOL für DE nicht zuverlässig)
+- **Schulferien:** `_load_schulferien_all_bl()` nutzt `holidays.SCHOOL`-Kategorie
+  (holidays >= 0.40) für alle 16 BL → schreibt in `ferien_kalender` für VJ + Planjahr.
+  Button lädt automatisch Feiertage + Sondertage + Schulferien für alle BL.
 - Lädt für Vorjahr (Basis) + Budgetjahr; nach Speichern: Ferien-Rebuild + Datumsmapping
-- **Anzeige:** nur Budgetjahr (kein Jahresfilter), Datum DD.MM.YYYY (DateColumn),
-  Spalte "Beschreibung" (nicht "Name"), Art großgeschrieben, BL ausgeschrieben,
-  keine redundante Jahr-Spalte bei Ferien (aus Startdatum abgeleitet)
+- **Anzeige:** BL-Filter in allen Tabs; Bundesland als erste Spalte, Sortierung BL→Datum;
+  Spalten: "Datum Budget" (früher "Datum Plan"), "Datum Basiszeitraum" (früher "Datum VJ");
+  Ferien-Tab zeigt BL-Filter + Jahresfilter (VJ/Budgetjahr)
+- Auto-Save mit normalisiertem Datums-Vergleich (`_norm_for_compare`) — sonst
+  Toast-Flackern durch Timestamp-vs-date-Stringdifferenzen
 - Auto-Save mit normalisiertem Datums-Vergleich (`_norm_for_compare`) — sonst
   Toast-Flackern durch Timestamp-vs-date-Stringdifferenzen
 
@@ -468,7 +471,7 @@ Fixture: `tests/conftest.py` (`make_test_db`/`make_engine`), deterministische
 | 8 | Ramadan-/Fasching-Effekt: Parameter (`apply_ramadan`, `apply_fasching`, `fasching_wirkung_pct`) vorhanden, Berechnung fehlt |
 | 9 | Tooltip Herleitung: verwendete Vergleichstage bei Feiertagseffekten anzeigen. Streamlit unterstützt keine Hover-Tooltips auf Zellen — Spalten-Header haben `help=`, Zeilenklick öffnet Detail-Panel; echte Zellen-Tooltips bräuchten Ag-Grid/Custom Component. |
 | 10 | `ensure_filialen_from_ist` nutzt Default "DE-RP" (Alt-Format) — auf "RP" umstellen |
-| 11 | Schulferien Auto-Load (holidays-Lib kann SCHOOL für DE nicht) — externe Quelle/API prüfen |
+| 11 | ✅ Schulferien Auto-Load via `holidays.SCHOOL` für alle 16 BL implementiert (erledigt 06/2026) |
 | 12 | Warengruppen-Budget: bewusst Out of Scope. |
 | 13 | `liefer_plan` ist Dead Code (immer 0.0, engine.py save) — als deprecated dokumentiert (6.5), Spalte bleibt (No-Drop-Regel). |
 | 14 | `_ferien_cache` wird je `plan_branch()`-Aufruf neu initialisiert statt auf Engine-Ebene — funktional korrekt, aber Faktoren werden je Filiale neu gerechnet (Performance). |
@@ -510,6 +513,7 @@ Fixture: `tests/conftest.py` (`make_test_db`/`make_engine`), deterministische
 
 | Git-Hash | Beschreibung |
 |----------|-------------|
+| `49000d9` | Feiertage/Ferien: BL-Filter, Schulferien auto alle 16 BL, Spaltenumbenennung; Datumsmapping: Feiertagstag in Basisbeschreibung; Validierung: 3 neue Vergleichs-Checks |
 | `39fc92b` | Plausibilitätsprüfungs-Seite (14_Validierung) mit Ampel-Checks |
 | `d5971f9` | Engine: plan_branch in Pipeline-Methoden modularisiert (Golden-Test unverändert) |
 | `10cc2fe` | Engine liest Ferien direkt aus ferien_kalender, Sync entfernt, ferien deprecated |
