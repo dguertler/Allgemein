@@ -22,10 +22,11 @@ st.info(
 planjahr = get_budgetjahr()
 
 MAPPING_ART_LABELS = {
-    "feiertag":    "Feiertag",
-    "ferien":      "Ferien",
-    "sondertag":   "Sondertag",
-    "iso_kw":      "KW-Vergleich",
+    "feiertag":      "Feiertag",
+    "feiertagstag":  "Feiertagstag",
+    "ferien":        "Ferien",
+    "sondertag":     "Sondertag",
+    "iso_kw":        "KW-Vergleich",
 }
 
 TYP_LABELS = {

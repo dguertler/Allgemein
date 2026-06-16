@@ -20,7 +20,13 @@ st.title("Planung ausführen")
 monat_rows = conn.execute(
     "SELECT monat, wachstum_pct FROM parameter_monat WHERE planjahr=?", (planjahr,)
 ).fetchall()
-wachstum_monat = {r["monat"]: r["wachstum_pct"] for r in monat_rows}
+_incr = {r["monat"]: r["wachstum_pct"] for r in monat_rows}
+# Preisanpassung is stored as incremental %; planning engine needs cumulative % per month
+_cumul = 0.0
+wachstum_monat = {}
+for _m in range(1, 13):
+    _cumul += _incr.get(_m, 0.0)
+    wachstum_monat[_m] = _cumul
 
 # Basiszeitraum: full previous year when planjahr <= current year, rolling 12 months otherwise
 today = date.today()
