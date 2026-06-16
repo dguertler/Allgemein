@@ -85,6 +85,13 @@ if st.session_state.get("_do_plan"):
         try:
             engine = PlanningEngine(conn, params)
             results = engine.run(selected_fils)
+            # Clear ALL planning data for this year before saving — ensures
+            # the table never contains stale results from previous partial runs
+            conn.execute(
+                "DELETE FROM planung WHERE CAST(strftime('%Y', datum) AS INTEGER)=?",
+                (planjahr,)
+            )
+            conn.commit()
             engine.save(results)
             st.success(f"✅ {len(selected_fils)} Filiale(n) — {len(results):,} Tage berechnet.")
             st.session_state["last_plan_results"] = results

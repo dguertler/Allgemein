@@ -114,6 +114,18 @@ from ui.session import get_gmbh as _get_gmbh, get_budgetjahr as _get_bj
 _gmbh = _get_gmbh()
 _bj   = _get_bj()
 
+# Auto-correct budgetjahr: if the stored year doesn't exist in DB, pick the newest existing
+if _gmbh:
+    from ui.session import get_conn as _get_conn, set_budgetjahr as _set_bj_app
+    _conn_app = _get_conn()
+    if _conn_app:
+        _yrs = [r[0] for r in _conn_app.execute(
+            "SELECT DISTINCT planjahr FROM parameter ORDER BY planjahr DESC"
+        ).fetchall()]
+        if _yrs and _bj not in _yrs:
+            _set_bj_app(_yrs[0])
+            _bj = _yrs[0]
+
 with st.sidebar:
     if _gmbh:
         from datetime import date as _date, timedelta as _td

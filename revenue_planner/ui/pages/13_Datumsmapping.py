@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from ui.session import get_conn, get_gmbh, require_db, get_budgetjahr
 import pandas as pd
+from datetime import date as _date
 
 require_db()
 conn = get_conn()
@@ -48,8 +49,11 @@ with col2:
                 par_row = conn.execute(
                     "SELECT * FROM parameter WHERE planjahr = ?", (planjahr,)
                 ).fetchone()
+                _today_dm = _date.today()
+                _stichtag_dm = _date(_today_dm.year, 1, 1) if planjahr <= _today_dm.year else _today_dm
                 params = PlanParams(
                     planjahr=planjahr,
+                    stichtag=_stichtag_dm,
                     preiserhoehung_pct=float(par_row["preiserhoehung_pct"] or 0) if par_row else 0,
                     ferien_puffer_wochen=int(par_row["ferien_puffer_wochen"] or 2) if par_row else 2,
                 )
@@ -70,6 +74,27 @@ df = pd.read_sql(
     conn, params=(planjahr,)
 )
 
+# Ferien-Kalender für Budget- und Basiszeitraum laden (für separate Ferien-Spalten)
+_fer_all = pd.read_sql(
+    "SELECT bundesland, art, start, ende, jahr FROM ferien_kalender "
+    "WHERE jahr IN (?, ?)",
+    conn, params=(planjahr, planjahr - 1)
+)
+
+
+def _ferien_label_for(iso_str: str, bl: str, fer_df: pd.DataFrame) -> str:
+    """Return ferien art if iso_str falls within a ferien period for this BL."""
+    if fer_df.empty or not iso_str:
+        return ""
+    d = iso_str[:10]
+    mask = (
+        (fer_df["bundesland"] == bl) &
+        (fer_df["start"] <= d) &
+        (fer_df["ende"] >= d)
+    )
+    arts = fer_df.loc[mask, "art"].tolist()
+    return ", ".join(arts) if arts else ""
+
 if df.empty:
     st.warning(
         f"Kein Mapping für Budgetjahr **{planjahr}** vorhanden. "
@@ -88,6 +113,14 @@ df["base_datum_de"]     = df["base_datum_dt"].dt.strftime("%d.%m.%Y")
 df["base_wt"]           = df["base_datum_dt"].dt.weekday.map(lambda x: WOCHENTAGE[x])
 df["monat"]             = df["plan_datum_dt"].dt.month
 df["mapping_art_label"] = df["mapping_art"].map(MAPPING_ART_LABELS).fillna(df["mapping_art"])
+
+# Separate Ferien-Spalten (Budgetzeitraum / Basiszeitraum)
+_fer_plan = _fer_all[_fer_all["jahr"] == planjahr].copy()
+_fer_vj   = _fer_all[_fer_all["jahr"] == planjahr - 1].copy()
+df["ferien_budget"] = df.apply(
+    lambda r: _ferien_label_for(r["plan_datum"], r["bundesland"], _fer_plan), axis=1)
+df["ferien_basis"]  = df.apply(
+    lambda r: _ferien_label_for(r["base_datum"], r["bundesland"], _fer_vj), axis=1)
 
 MONATE_DE = ["Januar", "Februar", "März", "April", "Mai", "Juni",
              "Juli", "August", "September", "Oktober", "November", "Dezember"]
@@ -132,14 +165,14 @@ if typ_sel:
 # ── Anzeigetabelle ───────────────────────────────────────────────────────────
 display = view[[
     "bundesland",
-    "plan_datum_de", "plan_wt", "bezeichnung",
-    "base_datum_de",  "base_wt", "base_bezeichnung",
+    "plan_datum_de", "plan_wt", "bezeichnung", "ferien_budget",
+    "base_datum_de",  "base_wt", "base_bezeichnung", "ferien_basis",
     "mapping_art_label",
 ]].copy()
 display.columns = [
     "Bundesland",
-    "Budgettag", "Wochentag", "Beschreibung Budget",
-    "Basistag",  "Wochentag ", "Beschreibung Basistag",
+    "Budgettag", "Wochentag", "Beschreibung Budget", "Ferien Budget",
+    "Basistag",  "Wochentag ", "Beschreibung Basistag", "Ferien Basis",
     "Mapping-Art",
 ]
 

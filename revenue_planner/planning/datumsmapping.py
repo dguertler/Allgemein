@@ -19,6 +19,8 @@ from typing import Iterator
 
 import pandas as pd
 
+from planning.engine import _normalize_bl
+
 
 def _date_range(start: date, end: date) -> Iterator[date]:
     d = start
@@ -51,9 +53,9 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
     bl_rows = conn.execute(
         "SELECT DISTINCT bundesland FROM filialen WHERE bundesland IS NOT NULL AND bundesland != ''"
     ).fetchall()
-    bundeslaender = [r["bundesland"] for r in bl_rows]
-    if not bundeslaender:
-        bundeslaender = ["DE-RP"]
+    # Normalize to 2-letter abbreviations; deduplicate
+    bl_raw = [r["bundesland"] for r in bl_rows]
+    bundeslaender = list(dict.fromkeys(_normalize_bl(b) for b in bl_raw)) if bl_raw else ["RP"]
 
     rows: list[tuple] = []
 
@@ -68,6 +70,7 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
             iso_week = plan_d.isocalendar()[1]
 
             for bl in bundeslaender:
+                # bl is already normalized (2-letter abbreviation)
                 bezeichnung_parts: list[str] = []
                 base_bezeichnung_parts: list[str] = []
                 plan_typ = "normal"

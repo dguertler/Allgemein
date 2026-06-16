@@ -32,6 +32,10 @@ def add(status, titel, details=None, caption=""):
 
 filialen = [dict(r) for r in conn.execute("SELECT * FROM filialen").fetchall()]
 
+# Bundesländer die tatsächlich in den Filialen hinterlegt sind (normalisiert)
+_fil_bls = {_normalize_bl(f["bundesland"]) for f in filialen if f.get("bundesland")}
+RELEVANT_BL = _fil_bls & set(VALID_BL)  # nur bekannte, gültige BL
+
 # 1) Filialen ohne/mit unbekanntem Bundesland
 bad_bl = [
     {"Filiale": f["fil_nr"], "Bundesland": f.get("bundesland") or "(leer)"}
@@ -155,7 +159,11 @@ def _ft_dict(rows) -> dict[str, int]:
 
 ft_base_d = _ft_dict(ft_base)
 ft_plan_d = _ft_dict(ft_plan)
-all_bl_ft = sorted(set(ft_base_d) | set(ft_plan_d))
+# Nur Bundesländer anzeigen, in denen es auch Filialen gibt (plus 'alle')
+all_bl_ft = sorted(
+    bl for bl in (set(ft_base_d) | set(ft_plan_d))
+    if bl == "alle" or bl in RELEVANT_BL
+)
 ft_compare_rows = []
 for bl in all_bl_ft:
     b, p = ft_base_d.get(bl, 0), ft_plan_d.get(bl, 0)
@@ -230,7 +238,11 @@ def _count_days(rows, yr_start, yr_end) -> dict[str, int]:
 
 fer_base_counts = _count_days(fer_base, base_start_str, base_end_str)
 fer_plan_counts = _count_days(fer_plan_all, plan_start_str, plan_end_str)
-all_fer_keys = sorted(set(fer_base_counts) | set(fer_plan_counts))
+# Nur Bundesländer anzeigen, in denen es auch Filialen gibt
+all_fer_keys = sorted(
+    k for k in (set(fer_base_counts) | set(fer_plan_counts))
+    if k.split(" – ")[0] in RELEVANT_BL
+)
 fer_compare_rows = []
 for key in all_fer_keys:
     b, p = fer_base_counts.get(key, 0), fer_plan_counts.get(key, 0)

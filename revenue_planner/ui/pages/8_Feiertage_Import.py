@@ -97,11 +97,11 @@ def _muttertag(year: int) -> date:
     return sundays[1]
 
 
-def _load_public_holidays_year(plan_yr: int) -> list:
+def _load_public_holidays_year(plan_yr: int, bl_filter: list) -> list:
     import holidays as hol_lib
     base_yr = plan_yr - 1
     plan_by_state, vj_by_state = {}, {}
-    for bl in BUNDESLAENDER:
+    for bl in bl_filter:
         plan_by_state[bl] = {d2.isoformat(): n for d2, n in
                              hol_lib.country_holidays("DE", subdiv=bl, years=plan_yr).items()}
         vj_by_state[bl]   = {d2.isoformat(): n for d2, n in
@@ -120,8 +120,8 @@ def _load_public_holidays_year(plan_yr: int) -> list:
     result = []
     for iso, info in sorted(date_info.items()):
         name, states = info["name"], info["states"]
-        if len(states) == len(BUNDESLAENDER):
-            vj_date = next((vj_lookup.get(name, {}).get(bl) for bl in BUNDESLAENDER
+        if len(states) == len(bl_filter):
+            vj_date = next((vj_lookup.get(name, {}).get(bl) for bl in bl_filter
                             if vj_lookup.get(name, {}).get(bl)), None)
             result.append({"datum_plan": iso, "datum_vj": vj_date,
                            "name": name, "bundesland": "alle", "art": "feiertag"})
@@ -188,14 +188,15 @@ def _sondertage_rows(plan_yr: int, with_muttertag, with_fasching, with_ramadan) 
     return rows
 
 
-def _load_schulferien_all_bl(years: list[int]) -> list:
-    """Load school holidays for all 16 BL for given years from holidays library.
+def _load_schulferien_all_bl(years: list[int], bl_filter: list | None = None) -> list:
+    """Load school holidays for given BL for given years from holidays library.
     Returns list of ferien_kalender rows (bundesland, art, jahr, start, ende)."""
     import holidays as hol_lib
 
+    bls = bl_filter if bl_filter else BUNDESLAENDER
     result = []
     for yr in years:
-        for bl in BUNDESLAENDER:
+        for bl in bls:
             try:
                 school_hols = hol_lib.country_holidays(
                     "DE", subdiv=bl, years=yr, categories=(hol_lib.SCHOOL,)
@@ -266,8 +267,11 @@ def _auto_datumsmapping(conn_db, plan_yr: int) -> str:
         par_row = conn_db.execute(
             "SELECT * FROM parameter WHERE planjahr=?", (plan_yr,)
         ).fetchone()
+        today_dm = date.today()
+        stichtag_dm = date(today_dm.year, 1, 1) if plan_yr <= today_dm.year else today_dm
         params = PlanParams(
             planjahr=plan_yr,
+            stichtag=stichtag_dm,
             preiserhoehung_pct=float(par_row["preiserhoehung_pct"] or 0) if par_row else 0,
             ferien_puffer_wochen=int(par_row["ferien_puffer_wochen"] or 2) if par_row else 2,
         )
@@ -278,12 +282,32 @@ def _auto_datumsmapping(conn_db, plan_yr: int) -> str:
         return f"Datumsmapping-Fehler: {ex}"
 
 
+# ── Bundesländer aus Filialen-Stammdaten ermitteln ───────────────────────────
+from planning.engine import _normalize_bl as _nbl
+_fil_bl_rows = conn.execute(
+    "SELECT DISTINCT bundesland FROM filialen WHERE bundesland IS NOT NULL AND bundesland != ''"
+).fetchall()
+_fil_bls_abbr = list(dict.fromkeys(
+    _nbl(r["bundesland"]) for r in _fil_bl_rows if _nbl(r["bundesland"]) in BUNDESLAENDER
+))
+# Falls noch keine Filialen angelegt: alle 16 laden
+AKTIVE_BL = _fil_bls_abbr if _fil_bls_abbr else BUNDESLAENDER
+
 # ── Abschnitt 1: Laden ───────────────────────────────────────────────────────
 st.subheader("1. Feiertage, Sondertage und Ferien laden")
-st.caption(
-    f"Lädt Feiertage, Sondertage und Schulferien für alle 16 Bundesländer — "
-    f"Budgetjahr **{planjahr}** und Basiszeitraum **{vj}**."
-)
+if AKTIVE_BL == BUNDESLAENDER:
+    st.caption(
+        f"Lädt Feiertage, Sondertage und Schulferien für alle 16 Bundesländer — "
+        f"Budgetjahr **{planjahr}** und Basiszeitraum **{vj}**."
+    )
+else:
+    bl_names = ", ".join(BL_ABBR_TO_NAME.get(b, b) for b in sorted(AKTIVE_BL))
+    st.info(
+        f"Es werden nur Feiertage und Ferien für die **{len(AKTIVE_BL)} Bundesländer** geladen, "
+        f"die in den Filialstammdaten hinterlegt sind: **{bl_names}**. "
+        "Bundesländer ohne Filiale werden ausgelassen, um die Datenmenge zu reduzieren. "
+        "Wenn Sie weitere Bundesländer benötigen, legen Sie bitte entsprechende Filialen an."
+    )
 
 col_opt1, col_opt2 = st.columns(2)
 with col_opt1:
@@ -300,14 +324,14 @@ if st.button("🔄 Feiertage, Sondertage und Ferien laden", type="primary"):
             load_years = [vj, planjahr]
             all_ft, all_st = [], []
             for yr in load_years:
-                ft_rows = _load_public_holidays_year(yr)
+                ft_rows = _load_public_holidays_year(yr, AKTIVE_BL)
                 all_ft.extend(ft_rows)
                 if with_feiertagstage:
                     all_ft.extend(_feiertagstage_rows(ft_rows))
                 all_st.extend(_sondertage_rows(yr, with_muttertag, with_fasching, with_ramadan))
 
-            # Schulferien für alle BL laden
-            schulferien_rows = _load_schulferien_all_bl(load_years)
+            # Schulferien nur für relevante BL laden
+            schulferien_rows = _load_schulferien_all_bl(load_years, AKTIVE_BL)
 
             if replace_existing:
                 for yr in load_years:
