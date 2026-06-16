@@ -6,6 +6,14 @@
 
 ## Behoben ✅
 
+- Datumsmapping/Ferien: Weihnachtsferien-Jahresgrenze korrekt gematcht — Januar-Plantage vergleichen mit Januar-VJ (nicht mehr 20.–31.12.); `match_ferien_periods()` per nächstem Startdatum (06/2026)
+- Datumsmapping: Ferien-Plantage werden IMMER mit Ferientagen der VJ-Periode verglichen (Pfingst-/Sommer-/Herbst-/Weihnachtsferien) — Same-Month-Constraint entfernt, robuste Wochentags-/Wochen-Zuordnung innerhalb der VJ-Periode (06/2026)
+- Datumsmapping: 24./31.12. als Quasi-Feiertage — nie Basistag für Normal-/Ferientage; Plan-24./31.12. → gleicher Kalendertag im Basisjahr (06/2026)
+- Feiertage/Ferien: Basiszeiträume in der Ferien-Tabelle editierbar; Änderung aktualisiert VJ-`ferien_kalender` und triggert Datumsmapping-Neuberechnung (06/2026)
+- Herleitung: Basisdatum-Spalte gefüllt (ISO-Datum durch Aggregation getragen, BL normalisiert) (06/2026)
+- Herleitung: Verteilung-Spalte leer bei Sondertag/Feiertagstag/Feiertag/Ferien; Ferien-Spalte leer bei Ferien↔Ferien (06/2026)
+- Regressionstest `tests/test_datumsmapping.py`: Ferien↔Ferien, Weihnachtsferien-Grenze, 24./31.12.-Ausschluss (06/2026)
+
 - Deutsche Zahlformate beim Import (3.000 ≠ 3,0)
 - Sicherheitsabfrage vor Neuimport
 - BL-Normalisierung in der Engine (Heilige Drei Könige etc. greifen jetzt)

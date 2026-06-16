@@ -116,6 +116,60 @@ def _safe_date(year: int, month: int, day: int) -> date | None:
         return None
 
 
+def _shift_back_one_year(d: date) -> date:
+    """Same calendar day one year earlier (Feb 29 → Feb 28)."""
+    return _safe_date(d.year - 1, d.month, d.day) or date(d.year - 1, 2, 28)
+
+
+def match_ferien_periods(plan_rows: list[dict], vj_rows: list[dict]) -> list[dict]:
+    """Match plan-year ferien periods to the correct prior-year (VJ) period.
+
+    ``(bundesland, art)`` is NOT unique: Weihnachtsferien appear twice per
+    calendar year (the January tail of the previous winter break and the
+    December start of the next one). Matching only on ``(bundesland, art)``
+    therefore mismatched the January plan period with the December VJ period.
+
+    Each plan period is matched to the VJ period of the same ``(bundesland,
+    art)`` whose start date is closest to the plan start shifted back one year.
+    This keeps January↔January and December↔December comparisons correct.
+
+    Returns a list of dicts:
+        {bundesland, art, start_vj, ende_vj, start_plan, ende_plan}
+    Plan periods without any VJ counterpart are skipped (as before).
+    """
+    from collections import defaultdict
+
+    vj_by_key: dict[tuple, list[dict]] = defaultdict(list)
+    for r in vj_rows:
+        vj_by_key[(r["bundesland"], r["art"])].append(r)
+
+    result: list[dict] = []
+    for p in plan_rows:
+        cands = vj_by_key.get((p["bundesland"], p["art"]))
+        if not cands:
+            continue
+        p_start = date.fromisoformat(p["start"])
+        target = _shift_back_one_year(p_start)
+        best = min(cands,
+                   key=lambda c: abs((date.fromisoformat(c["start"]) - target).days))
+        result.append({
+            "bundesland": p["bundesland"], "art": p["art"],
+            "start_vj": best["start"], "ende_vj": best["ende"],
+            "start_plan": p["start"], "ende_plan": p["ende"],
+        })
+    return result
+
+
+def is_special_quasi_feiertag(d: date) -> bool:
+    """Dec 24 and Dec 31 are treated like holidays (reduced/closed business).
+
+    They must never serve as a base-comparison day for normal or ferien days,
+    and a plan Dec 24/31 always compares to the same calendar date in the base
+    year (handled in datumsmapping).
+    """
+    return d.month == 12 and d.day in (24, 31)
+
+
 # ── Main engine ───────────────────────────────────────────────────────────────
 
 class PlanningEngine:
@@ -194,22 +248,15 @@ class PlanningEngine:
         # Planjahr-Perioden + zugehörige Vorjahresperioden, gematcht über
         # bundesland+art. Ohne Vorjahresperiode wird die Periode übersprungen
         # (wie der frühere Sync). Die Legacy-Tabelle `ferien` ist deprecated.
-        plan_rows = c.execute(
+        plan_rows = [dict(r) for r in c.execute(
             "SELECT bundesland, art, start, ende FROM ferien_kalender WHERE jahr=?",
-            (p.planjahr,)).fetchall()
-        vj_rows = {(r["bundesland"], r["art"]): r for r in c.execute(
+            (p.planjahr,)).fetchall()]
+        vj_rows = [dict(r) for r in c.execute(
             "SELECT bundesland, art, start, ende FROM ferien_kalender WHERE jahr=?",
-            (p.planjahr - 1,)).fetchall()}
-        self.ferien_plan: list[dict] = []
-        for r in plan_rows:
-            vj = vj_rows.get((r["bundesland"], r["art"]))
-            if not vj:
-                continue
-            self.ferien_plan.append({
-                "bundesland": r["bundesland"], "art": r["art"],
-                "start_vj": vj["start"], "ende_vj": vj["ende"],
-                "start_plan": r["start"], "ende_plan": r["ende"],
-            })
+            (p.planjahr - 1,)).fetchall()]
+        # Nearest-start matching handles the Weihnachtsferien year-boundary split
+        # (Jan↔Jan, Dec↔Dec) instead of an ambiguous (bundesland, art) lookup.
+        self.ferien_plan: list[dict] = match_ferien_periods(plan_rows, vj_rows)
         self._build_ferien_windows()
 
         # IST-Daten (gesamt)
@@ -267,8 +314,10 @@ class PlanningEngine:
         return pd.Timestamp(date(year, month + 1, 1))
 
     def _build_ferien_windows(self):
-        """Mappe Plan-Ferientage → (bundesland, art, wochenindex). Puffer separat (VJ-Berechnung)."""
-        self.ferien_plan_dates: dict[str, dict[str, tuple[str, int]]] = {}  # iso → {bl: (art, woche)}
+        """Mappe Plan-Ferientage → (art, wochenindex, period). Puffer separat (VJ-Berechnung)."""
+        # iso → {bl: (art, woche, period)} — period disambiguates the two
+        # Weihnachtsferien occurrences (Jan tail vs Dec start) per calendar year.
+        self.ferien_plan_dates: dict[str, dict[str, tuple]] = {}
         self.ferien_vj_dates: set[str] = set()  # alle VJ-Ferientage (für direkte Vergleichsprüfung)
         for f in self.ferien_plan:
             bl = f["bundesland"]
@@ -277,7 +326,7 @@ class PlanningEngine:
             ende = date.fromisoformat(f["ende_plan"])
             for d in _date_range(start, ende):
                 woche = (d - start).days // 7 + 1
-                self.ferien_plan_dates.setdefault(d.isoformat(), {})[bl] = (art, woche)
+                self.ferien_plan_dates.setdefault(d.isoformat(), {})[bl] = (art, woche, f)
             # VJ-Ferientage für direkten Vergleich tracken
             vj_start = date.fromisoformat(f["start_vj"])
             vj_ende = date.fromisoformat(f["ende_vj"])
@@ -366,21 +415,16 @@ class PlanningEngine:
 
     # ── Ferienfaktor pro Woche ────────────────────────────────────────────
 
-    def _ferien_faktor_woche(self, fil_nr: str, bl: str, art: str, woche: int) -> float:
+    def _ferien_faktor_woche(self, fil_nr: str, period: dict | None, woche: int) -> float:
         """Lese/berechne Ferienfaktor: Ø Umsatz Ferienwoche / Ø Puffer (Wochentags-gematcht)."""
-        key = (fil_nr, bl, art, woche)
+        if not period:
+            return 1.0
+        key = (fil_nr, period["bundesland"], period["art"], period["start_plan"], woche)
         if key in self._ferien_cache:
             return self._ferien_cache[key]
 
         df = self._branch_base_ist(fil_nr)
         if df.empty:
-            self._ferien_cache[key] = 1.0
-            return 1.0
-
-        # Plan-Ferienperiode dieser art/bl finden → entsprechende VJ-Periode
-        period = next((f for f in self.ferien_plan
-                       if f["bundesland"] == bl and f["art"] == art), None)
-        if not period:
             self._ferien_cache[key] = 1.0
             return 1.0
 
@@ -420,7 +464,19 @@ class PlanningEngine:
 
     def _ferien_info_for_day(self, iso: str, bl: str) -> tuple[str, int] | None:
         bls = self.ferien_plan_dates.get(iso, {})
-        return bls.get(bl) or bls.get("alle")
+        entry = bls.get(bl) or bls.get("alle")
+        if entry is None:
+            return None
+        art, woche, _period = entry
+        return art, woche
+
+    def _ferien_period_for_day(self, iso: str, bl: str) -> dict | None:
+        """Die konkrete Ferienperiode (mit start_vj/ende_vj), die diesen Plantag abdeckt."""
+        bls = self.ferien_plan_dates.get(iso, {})
+        entry = bls.get(bl) or bls.get("alle")
+        if entry is None:
+            return None
+        return entry[2]
 
     # ── Feiertag / Sondertag ──────────────────────────────────────────────
 
@@ -627,7 +683,8 @@ class PlanningEngine:
                 direct_ferien = True
             else:
                 # Kein VJ-Ferien-Äquivalent für diesen Wochentag → Ferienfaktor anwenden
-                ff = self._ferien_faktor_woche(fil_nr, bl, m["ferien_art"], m["ferien_woche"])
+                period = self._ferien_period_for_day(d.isoformat(), bl)
+                ff = self._ferien_faktor_woche(fil_nr, period, m["ferien_woche"])
                 raw = round(tag_plan * ff, 2)
                 eff_ferien = raw - tag_plan
 

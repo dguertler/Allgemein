@@ -21,7 +21,7 @@ from typing import Iterator
 
 import pandas as pd
 
-from planning.engine import _normalize_bl
+from planning.engine import _normalize_bl, is_special_quasi_feiertag
 
 
 def _date_range(start: date, end: date) -> Iterator[date]:
@@ -29,6 +29,48 @@ def _date_range(start: date, end: date) -> Iterator[date]:
     while d <= end:
         yield d
         d += timedelta(days=1)
+
+
+def _is_vj_holiday(d: date, bl: str, engine) -> bool:
+    """True if d is an actual public holiday (art='feiertag') in the base year for bl."""
+    return any(
+        fe.get("art") == "feiertag" and fe["bundesland"] in ("alle", bl)
+        for fe in engine.feiertage.get(d.isoformat(), [])
+    )
+
+
+def _ferien_base_day(period: dict, woche: int, wt: int, blocked) -> date:
+    """Pick the base-year reference day for a plan ferien day.
+
+    Guarantees the result stays a *ferien* day in the matched VJ period
+    (same weekday, nearest week), skipping days that must never be a base
+    comparison (public holidays, Dec 24/31). Only if the VJ period contains
+    no usable same-weekday day at all (e.g. the matching weekdays are all
+    Dec 24/31) does it search outward for the nearest non-blocked same
+    weekday — so a ferien day is always compared with a ferien-like day.
+    """
+    vj_start = date.fromisoformat(period["start_vj"])
+    vj_ende = date.fromisoformat(period["ende_vj"])
+    wk_start = vj_start + timedelta(weeks=woche - 1)
+    if wk_start > vj_ende:
+        wk_start = vj_start
+    ideal = wk_start + timedelta(days=(wt - wk_start.weekday()))
+    in_period = [d for d in _date_range(vj_start, vj_ende)
+                 if d.weekday() == wt and not blocked(d)]
+    if in_period:
+        return min(in_period, key=lambda d: abs((d - ideal).days))
+    # No usable same-weekday day inside the period (e.g. the only matching
+    # weekdays are Dec 24/31). Step backward first to stay within the base
+    # year / pre-ferien buffer, only then forward.
+    for shift in range(1, 60):
+        alt = ideal - timedelta(weeks=shift)
+        if not blocked(alt):
+            return alt
+    for shift in range(1, 60):
+        alt = ideal + timedelta(weeks=shift)
+        if not blocked(alt):
+            return alt
+    return ideal
 
 
 def _safe_date(year: int, month: int, day: int) -> date | None:
@@ -138,23 +180,14 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                     if plan_typ == "normal":
                         plan_typ = "ferien"
                         mapping_art = "ferien"
-                        period = next(
-                            (f for f in engine.ferien_plan
-                             if f["bundesland"] == bl and f["art"] == art),
-                            None
-                        )
+                        period = engine._ferien_period_for_day(iso, bl)
                         if period:
-                            vj_start = date.fromisoformat(period["start_vj"])
-                            vj_ende = date.fromisoformat(period["ende_vj"])
-                            wk_start = vj_start + timedelta(weeks=woche - 1)
-                            delta = wt - wk_start.weekday()
-                            base_d_candidate = wk_start + timedelta(days=delta)
-                            # Only use candidate if it falls within the VJ ferien period
-                            # AND stays in the same calendar month as the plan day
-                            # (prevents year-boundary crossings for Weihnachtsferien Jan days).
-                            if (vj_start <= base_d_candidate <= vj_ende
-                                    and base_d_candidate.month == plan_d.month):
-                                base_d = base_d_candidate
+                            # A ferien plan day must always map to a ferien day
+                            # in the matched VJ period (weekday-aligned), never to
+                            # a public holiday or Dec 24/31.
+                            def _blocked(d, _bl=bl):
+                                return _is_vj_holiday(d, _bl, engine) or is_special_quasi_feiertag(d)
+                            base_d = _ferien_base_day(period, woche, wt, _blocked)
 
                     # 4.5. Feiertagstag override for ferien days:
                     # A day that is in Ferien but also a Feiertagstag uses
@@ -182,26 +215,18 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                     base_d = _date_from_iso_week(by, iso_week, wt)
                     _used_iso_kw = True
 
-                # 6. For normal/feiertagstag days and ferien days that fell back to ISO-KW:
-                # avoid landing on a VJ holiday or vacation
+                # 6. For normal/feiertagstag days (and ferien days that fell back
+                # to ISO-KW): avoid landing on a VJ holiday, vacation or Dec 24/31.
                 if plan_typ in ("normal", "feiertagstag") or (plan_typ == "ferien" and _used_iso_kw):
-                    base_iso = base_d.isoformat()
-                    _is_vj_holiday = any(
-                        fe.get("art") == "feiertag" and fe["bundesland"] in ("alle", bl)
-                        for fe in engine.feiertage.get(base_iso, [])
-                    )
-                    _is_vj_ferien = base_iso in _vj_ferien_bl.get(bl, set())
-                    if _is_vj_holiday or _is_vj_ferien:
+                    def _avoid(d, _bl=bl):
+                        return (_is_vj_holiday(d, _bl, engine)
+                                or d.isoformat() in _vj_ferien_bl.get(_bl, set())
+                                or is_special_quasi_feiertag(d))
+                    if _avoid(base_d):
                         for shift in range(1, 9):
                             for direction in (-1, 1):
                                 alt = base_d + timedelta(weeks=shift * direction)
-                                alt_iso = alt.isoformat()
-                                alt_holiday = any(
-                                    fe.get("art") == "feiertag" and fe["bundesland"] in ("alle", bl)
-                                    for fe in engine.feiertage.get(alt_iso, [])
-                                )
-                                alt_ferien = alt_iso in _vj_ferien_bl.get(bl, set())
-                                if not alt_holiday and not alt_ferien:
+                                if not _avoid(alt):
                                     base_d = alt
                                     break
                             else:

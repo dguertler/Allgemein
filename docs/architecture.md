@@ -118,8 +118,27 @@ budget = ist_vj + eff_oeffnung + eff_verteilung + eff_wochentag
 - Wochentagsbasiertes Matching: gleicher Wochentag in ISO-KW des Basisjahrs
 - Feiertag-zu-Feiertag Matching (via datum_vj)
 - Ferienwochen-Matching je Bundesland
-- Muss NEU generiert werden wenn Feiertage/Ferien geändert werden
-  (8_Feiertage triggert `_auto_datumsmapping` automatisch)
+- Muss NEU generiert werden wenn Feiertage/Sondertage/Ferien geändert werden —
+  **auch bei Änderung der Basiszeiträume**. Alle drei Editier-Tabs in
+  8_Feiertage rufen nach jedem Speichern `_auto_datumsmapping` auf.
+
+#### Harte Garantien (Regressionstest `tests/test_datumsmapping.py` — NIE brechen!)
+1. **Ferien ↔ Ferien:** Ein Ferien-Plantag wird IMMER mit einem Ferientag der
+   gematchten VJ-Periode verglichen (wochentagsgematcht), nie mit einem
+   Normaltag, Feiertag oder Quasi-Feiertag. Einzige Ausnahme: die VJ-Periode
+   enthält keinen verwendbaren Tag dieses Wochentags (dann nächster passender
+   Wochentag außerhalb der Periode).
+2. **Weihnachtsferien-Jahresgrenze:** Weihnachtsferien kommen pro Kalenderjahr
+   ZWEIMAL vor (Januar-Ausläufer + Dezember-Beginn). `(bundesland, art)` ist
+   daher KEIN eindeutiger Schlüssel. `match_ferien_periods()` (engine.py) ordnet
+   jede Planperiode der VJ-Periode mit dem nächstgelegenen Startdatum
+   (Plan-Start minus 1 Jahr) zu → Januar↔Januar, Dezember↔Dezember.
+3. **24./31.12. sind Quasi-Feiertage** (`is_special_quasi_feiertag`): dürfen
+   NIE Basistag für Normal- oder Ferientage sein. Ein Plan-24./31.12. vergleicht
+   sich mit demselben Kalendertag im Basisjahr (24.→24., 31.→31.).
+- `_ferien_faktor_woche` und `_ferien_period_for_day` arbeiten periodengenau
+  (period-Referenz in `ferien_plan_dates`), damit die zwei Weihnachtsferien-
+  Vorkommen nicht kollidieren.
 
 ### Feiertagstage (art='feiertagstag')
 `_relevant_feiertag()` filtert **nur** `art='feiertag'`. Feiertagstage werden als
@@ -167,6 +186,14 @@ Langfristig: Legacy-Tabelle `sondertage` abschaffen (offener Punkt).
 ### ferien_kalender ist die einzige Ferien-Quelle (seit 06/2026)
 `ferien`-Tabelle ist deprecated. **Ohne Vorjahres-Eintrag in ferien_kalender wird
 die Periode übersprungen** → Ferien immer für Planjahr UND Vorjahr laden!
+
+### Ferien-Perioden-Matching (Plan ↔ VJ)
+NIE per `dict[(bundesland, art)]` matchen — Weihnachtsferien sind pro Jahr
+doppelt vorhanden und der letzte Eintrag würde den ersten überschreiben
+(Januar-Plantage landeten fälschlich auf Dezember-VJ). Immer
+`match_ferien_periods(plan_rows, vj_rows)` aus `engine.py` verwenden
+(nächstgelegenes Startdatum). Genutzt in: engine `_load_reference_data`,
+`8_Feiertage._rebuild_ferien_from_kalender`, Ferien-Tab Basis-Spalten.
 
 ### Importer-Datumsparser (Bug behoben 06/2026)
 Fallback parst die unveränderten Rohstrings (nicht die bereits NaT-coercte Spalte).

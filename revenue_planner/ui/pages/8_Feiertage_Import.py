@@ -307,28 +307,28 @@ def _load_schulferien_all_bl(years: list[int], bl_filter: list | None = None) ->
 
 
 def _rebuild_ferien_from_kalender(conn_db, plan_yr: int):
-    """Rebuild ferien table for plan_yr using ferien_kalender pairs (VJ + plan year)."""
+    """Rebuild ferien table for plan_yr using ferien_kalender pairs (VJ + plan year).
+
+    Uses nearest-start matching so the two Weihnachtsferien occurrences per year
+    (January tail vs December start) map to the correct VJ period.
+    """
+    from planning.engine import match_ferien_periods
     base_yr = plan_yr - 1
-    vj_map = {(r["bundesland"], r["art"]): (r["start"], r["ende"])
-              for r in conn_db.execute(
-                  "SELECT bundesland, art, start, ende FROM ferien_kalender WHERE jahr=?",
-                  (base_yr,)).fetchall()}
-    plan_entries = conn_db.execute(
+    plan_rows = [dict(r) for r in conn_db.execute(
         "SELECT bundesland, art, start, ende FROM ferien_kalender WHERE jahr=?",
-        (plan_yr,)
-    ).fetchall()
+        (plan_yr,)).fetchall()]
+    vj_rows = [dict(r) for r in conn_db.execute(
+        "SELECT bundesland, art, start, ende FROM ferien_kalender WHERE jahr=?",
+        (base_yr,)).fetchall()]
     conn_db.execute(
         "DELETE FROM ferien WHERE CAST(strftime('%Y', start_plan) AS INTEGER)=?", (plan_yr,)
     )
-    for r in plan_entries:
-        bl, art = r["bundesland"], r["art"]
-        vj_dates = vj_map.get((bl, art))
-        if not vj_dates:
-            continue
+    for m in match_ferien_periods(plan_rows, vj_rows):
         conn_db.execute(
             "INSERT INTO ferien (bundesland, art, start_vj, ende_vj, start_plan, ende_plan) "
             "VALUES (?,?,?,?,?,?)",
-            (bl, art, vj_dates[0], vj_dates[1], r["start"], r["ende"])
+            (m["bundesland"], m["art"], m["start_vj"], m["ende_vj"],
+             m["start_plan"], m["ende_plan"])
         )
     conn_db.commit()
 
@@ -651,25 +651,35 @@ with tab_fer:
     ende_col  = fk_orig.columns.get_loc("ende")
     fk_orig.insert(ende_col + 1, "wt_ende", fk_orig["ende"].apply(_wt_name))
 
-    # Base-year comparison columns
-    vj_rows_fer = pd.read_sql(
+    # Base-year comparison columns — nearest-start matching so the two
+    # Weihnachtsferien occurrences per year (Jan tail / Dec start) map correctly.
+    from planning.engine import match_ferien_periods
+    _plan_rows_raw = [dict(r) for r in conn.execute(
         "SELECT bundesland, art, start, ende FROM ferien_kalender WHERE jahr=?",
-        conn, params=[vj],
-    )
-    vj_lookup_fer = {
-        (_bl_to_name(r["bundesland"]), r["art"]): (r["start"], r["ende"])
-        for _, r in vj_rows_fer.iterrows()
+        (planjahr,)).fetchall()]
+    _vj_rows_raw = [dict(r) for r in conn.execute(
+        "SELECT bundesland, art, start, ende FROM ferien_kalender WHERE jahr=?",
+        (vj,)).fetchall()]
+    _match_map = {
+        (m["bundesland"], m["art"], m["start_plan"]): (m["start_vj"], m["ende_vj"])
+        for m in match_ferien_periods(_plan_rows_raw, _vj_rows_raw)
     }
 
+    def _basis_pair(row):
+        try:
+            start_iso = pd.Timestamp(row["start"]).strftime("%Y-%m-%d")
+        except Exception:
+            return None
+        return _match_map.get((_bl_to_abbr(row["bundesland"]), row["art"], start_iso))
+
     def _vj_col(row, which: str):
-        pair = vj_lookup_fer.get((row["bundesland"], row["art"]))
+        pair = _basis_pair(row)
         if not pair:
             return pd.NaT
         return pd.Timestamp(pair[0] if which == "start" else pair[1])
 
     def _fer_abweichung(row) -> str:
-        key = (row["bundesland"], row["art"])
-        vj_pair = vj_lookup_fer.get(key)
+        vj_pair = _basis_pair(row)
         if not vj_pair:
             return "kein VJ-Eintrag"
         plan_s, plan_e = row["start"], row["ende"]
@@ -692,8 +702,9 @@ with tab_fer:
                    fk_orig["ende_basis"].apply(_wt_name))
     fk_orig["abweichung"] = fk_orig.apply(_fer_abweichung, axis=1)
 
-    _readonly_fk = ["wt_start", "wt_ende", "start_basis", "wt_start_basis",
-                    "ende_basis", "wt_ende_basis", "abweichung"]
+    # Basiszeiträume (start_basis/ende_basis) sind editierbar; Wochentage und
+    # Abweichung bleiben abgeleitet (read-only, aktualisieren sich beim Speichern).
+    _readonly_fk = ["wt_start", "wt_ende", "wt_start_basis", "wt_ende_basis", "abweichung"]
 
     edited_fk = st.data_editor(
         fk_orig.copy(),
@@ -713,10 +724,10 @@ with tab_fer:
                                                           width="small"),
             "wt_ende":        st.column_config.TextColumn("Wt.", disabled=True, width="small"),
             "start_basis":    st.column_config.DateColumn("Start Basis", format="DD.MM.YYYY",
-                                                          disabled=True, width="small"),
+                                                          width="small"),
             "wt_start_basis": st.column_config.TextColumn("Wt.", disabled=True, width="small"),
             "ende_basis":     st.column_config.DateColumn("Ende Basis", format="DD.MM.YYYY",
-                                                          disabled=True, width="small"),
+                                                          width="small"),
             "wt_ende_basis":  st.column_config.TextColumn("Wt.", disabled=True, width="small"),
             "abweichung":     st.column_config.TextColumn("Abweichung (Tage)", disabled=True),
         },
@@ -731,25 +742,56 @@ with tab_fer:
     ).fetchone()["n"]
     st.caption(f"{len(fk_orig)} Einträge angezeigt · {n_total} gesamt ({n_bl} Bundesländer) für {vj}+{planjahr}")
 
-    _date_cols_fk = ["start", "ende"]
-    _cmp_cols_fk = ["bundesland", "start", "ende", "art"]
-    if not _norm_for_compare(fk_orig[_cmp_cols_fk], _date_cols_fk).equals(
-            _norm_for_compare(edited_fk[[c for c in _cmp_cols_fk if c in edited_fk.columns]],
-                              _date_cols_fk)):
-        conn.execute("DELETE FROM ferien_kalender WHERE jahr=?", (planjahr,))
-        for _, row in edited_fk.dropna(subset=["bundesland", "art"]).iterrows():
-            bl  = _bl_to_abbr(row.get("bundesland"))
-            art = str(row.get("art") or "").strip()
-            s   = _iso(row.get("start"))
-            e   = _iso(row.get("ende"))
-            if not bl or not art or not s or not e:
-                continue
-            jahr_val = int(s[:4])
-            conn.execute(
-                "INSERT OR IGNORE INTO ferien_kalender (bundesland, art, jahr, start, ende) "
-                "VALUES (?,?,?,?,?)", (bl, art, jahr_val, s, e)
-            )
-        conn.commit()
+    _date_cols_plan  = ["start", "ende"]
+    _date_cols_basis = ["start_basis", "ende_basis"]
+    _cmp_cols_plan   = ["bundesland", "start", "ende", "art"]
+    _cmp_cols_basis  = ["start_basis", "ende_basis"]
+
+    _plan_changed = not _norm_for_compare(fk_orig[_cmp_cols_plan], _date_cols_plan).equals(
+        _norm_for_compare(edited_fk[[c for c in _cmp_cols_plan if c in edited_fk.columns]],
+                          _date_cols_plan))
+    _basis_changed = not _norm_for_compare(fk_orig[_cmp_cols_basis], _date_cols_basis).equals(
+        _norm_for_compare(edited_fk[[c for c in _cmp_cols_basis if c in edited_fk.columns]],
+                          _date_cols_basis))
+
+    if _plan_changed or _basis_changed:
+        # 1. Basiszeitraum-Änderungen → zugehörige VJ-Zeilen aktualisieren
+        #    (über die ursprünglich gematchte VJ-Identität identifiziert).
+        if _basis_changed:
+            for i in range(min(len(fk_orig), len(edited_fk))):
+                o = fk_orig.iloc[i]
+                e = edited_fk.iloc[i]
+                old_s, old_e = _iso(o.get("start_basis")), _iso(o.get("ende_basis"))
+                new_s, new_e = _iso(e.get("start_basis")), _iso(e.get("ende_basis"))
+                if (old_s, old_e) == (new_s, new_e):
+                    continue
+                if not (old_s and old_e and new_s and new_e):
+                    continue
+                bl  = _bl_to_abbr(o.get("bundesland"))
+                art = str(o.get("art") or "").strip()
+                conn.execute(
+                    "UPDATE ferien_kalender SET start=?, ende=?, jahr=? "
+                    "WHERE bundesland=? AND art=? AND jahr=? AND start=? AND ende=?",
+                    (new_s, new_e, int(new_s[:4]), bl, art, vj, old_s, old_e)
+                )
+            conn.commit()
+
+        # 2. Budgetzeitraum-Änderungen → Planjahr-Zeilen neu aufbauen
+        if _plan_changed:
+            conn.execute("DELETE FROM ferien_kalender WHERE jahr=?", (planjahr,))
+            for _, row in edited_fk.dropna(subset=["bundesland", "art"]).iterrows():
+                bl  = _bl_to_abbr(row.get("bundesland"))
+                art = str(row.get("art") or "").strip()
+                s   = _iso(row.get("start"))
+                e   = _iso(row.get("ende"))
+                if not bl or not art or not s or not e:
+                    continue
+                conn.execute(
+                    "INSERT OR IGNORE INTO ferien_kalender (bundesland, art, jahr, start, ende) "
+                    "VALUES (?,?,?,?,?)", (bl, art, int(s[:4]), s, e)
+                )
+            conn.commit()
+
         _rebuild_ferien_from_kalender(conn, planjahr)
         dm_msg = _auto_datumsmapping(conn, planjahr)
         st.toast(f"✅ Ferien gespeichert. {dm_msg}")

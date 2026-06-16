@@ -48,14 +48,17 @@ if "budget" not in df_all.columns or df_all["budget"].sum() == 0:
             break
 
 df_all["datum"] = pd.to_datetime(df_all["datum"])
+df_all["_iso"] = df_all["datum"].dt.strftime("%Y-%m-%d")
 
-# Datumsmapping für Basisdatum-Spalte im Tag-View laden
+# Datumsmapping für Basisdatum-Spalte und Tagestyp (inkl. Feiertagstag) im Tag-View
+from planning.engine import _normalize_bl as _nbl_hrl
 _dm_rows = conn.execute(
-    "SELECT plan_datum, base_datum, bundesland FROM datumsmapping "
+    "SELECT plan_datum, base_datum, bundesland, plan_typ FROM datumsmapping "
     "WHERE CAST(strftime('%Y', plan_datum) AS INTEGER)=?",
     (planjahr,),
 ).fetchall()
 _dm_lookup = {(r["plan_datum"], r["bundesland"]): r["base_datum"] for r in _dm_rows}
+_dm_typ_lookup = {(r["plan_datum"], r["bundesland"]): r["plan_typ"] for r in _dm_rows}
 
 def _base_datum_for(row) -> str:
     iso = row["datum"].strftime("%Y-%m-%d")
@@ -154,7 +157,7 @@ elif entity_ebene == "Bundesland":
 
 extra_agg = {}
 if zeit_ebene == "Tag":
-    for c in ["wochentag", "tagestyp", "feiertag_name", "ferien_art"]:
+    for c in ["wochentag", "tagestyp", "feiertag_name", "ferien_art", "_iso"]:
         if c in df_all.columns:
             extra_agg[c] = "first"
     # bundesland only in extra_agg for Filiale entity (for Bundesland it's a group key already)
@@ -200,14 +203,22 @@ if zeit_ebene == "Tag":
     if "wochentag" in agg.columns:
         agg["_wt_str"] = agg["wochentag"].apply(
             lambda w: WT_MAP[int(w)] if pd.notna(w) else "")
-    def _lookup_basisdatum(row) -> str:
+
+    def _row_iso(row) -> str:
+        iso = str(row.get("_iso", "") or "")
+        if iso:
+            return iso
         try:
-            iso = pd.Timestamp(row["Zeit"], dayfirst=True).strftime("%Y-%m-%d")
+            return pd.to_datetime(row["Zeit"], dayfirst=True).strftime("%Y-%m-%d")
         except Exception:
             return ""
-        bl = str(row.get("bundesland", "") or "")
-        if not bl:
-            return ""
+
+    def _row_bl(row) -> str:
+        return _nbl_hrl(str(row.get("bundesland", "") or "")) if row.get("bundesland") else ""
+
+    def _lookup_basisdatum(row) -> str:
+        iso = _row_iso(row)
+        bl = _row_bl(row)
         bd = _dm_lookup.get((iso, bl)) or _dm_lookup.get((iso, "alle")) or ""
         if not bd:
             return ""
@@ -215,10 +226,30 @@ if zeit_ebene == "Tag":
             return pd.Timestamp(bd).strftime("%d.%m.%Y")
         except Exception:
             return bd
+
+    def _eff_daytype(row) -> str:
+        """Effektiver Tagestyp inkl. Feiertagstag (aus Datumsmapping ergänzt)."""
+        typ = str(row.get("tagestyp", "") or "")
+        if typ in ("feiertag", "sondertag", "ferien", "geschlossen"):
+            return typ
+        iso, bl = _row_iso(row), _row_bl(row)
+        dm_typ = _dm_typ_lookup.get((iso, bl)) or _dm_typ_lookup.get((iso, "alle")) or ""
+        if dm_typ in ("feiertagstag", "feiertag", "sondertag"):
+            return dm_typ
+        return typ
+
     agg["_basisdatum"] = agg.apply(_lookup_basisdatum, axis=1)
+    agg["_daytype"] = agg.apply(_eff_daytype, axis=1)
     agg["_tagesinfo"] = agg.apply(
         lambda r: _build_tagesinfo(r.get("tagestyp", ""), r.get("feiertag_name", "")),
         axis=1)
+
+    # Verteilung hat keinen Wert bei Sondertag/Feiertagstag/Feiertag/Ferien.
+    _no_verteilung = agg["_daytype"].isin(["feiertag", "feiertagstag", "sondertag", "ferien"])
+    agg.loc[_no_verteilung, "eff_verteilung"] = None
+    # Ferien-Effekt leer, wenn Ferien mit Ferien verglichen wird (kein Differenzeffekt).
+    _ferien_vs_ferien = (agg["_daytype"] == "ferien") & (agg["eff_ferien"].abs() < 0.005)
+    agg.loc[_ferien_vs_ferien, "eff_ferien"] = None
 
 # IST aktuell vs. Budget — nur bis zum letzten importierten Tag
 agg["Abw. €"] = agg.apply(
@@ -245,7 +276,7 @@ if zeit_ebene == "Tag":
     rename["_tagesinfo"] = "Tagesinfo"
     rename["ferien_art"] = "Ferien"
 
-drop_cols = ["_sort", "eff_norm", "_budget_for_ist"] + [
+drop_cols = ["_sort", "eff_norm", "_budget_for_ist", "_iso", "_daytype"] + [
     c for c in ["wochentag", "tagestyp", "feiertag_name"]
     if c in agg.columns and zeit_ebene == "Tag"
 ]
