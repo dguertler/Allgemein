@@ -48,6 +48,26 @@ if "budget" not in df_all.columns or df_all["budget"].sum() == 0:
             break
 
 df_all["datum"] = pd.to_datetime(df_all["datum"])
+
+# Datumsmapping für Basisdatum-Spalte im Tag-View laden
+_dm_rows = conn.execute(
+    "SELECT plan_datum, base_datum, bundesland FROM datumsmapping "
+    "WHERE CAST(strftime('%Y', plan_datum) AS INTEGER)=?",
+    (planjahr,),
+).fetchall()
+_dm_lookup = {(r["plan_datum"], r["bundesland"]): r["base_datum"] for r in _dm_rows}
+
+def _base_datum_for(row) -> str:
+    iso = row["datum"].strftime("%Y-%m-%d")
+    bl = str(row.get("bundesland", "") or "")
+    bd = _dm_lookup.get((iso, bl)) or _dm_lookup.get((iso, "alle")) or ""
+    if not bd:
+        return ""
+    try:
+        return pd.Timestamp(bd).strftime("%d.%m.%Y")
+    except Exception:
+        return bd
+
 df_all["ist_aktuell"] = df_all.apply(
     lambda r: _ist_lookup_hrl.get((str(r["fil_nr"]), r["datum"].strftime("%Y-%m-%d"))),
     axis=1
@@ -163,6 +183,21 @@ if zeit_ebene == "Tag":
     if "wochentag" in agg.columns:
         agg["_wt_str"] = agg["wochentag"].apply(
             lambda w: WT_MAP[int(w)] if pd.notna(w) else "")
+    # Basisdatum aus Datumsmapping (Zeit ist "DD.MM.YYYY" → ISO umrechnen)
+    def _lookup_basisdatum(row) -> str:
+        try:
+            iso = pd.Timestamp(row["Zeit"], dayfirst=True).strftime("%Y-%m-%d")
+        except Exception:
+            return ""
+        bl = str(row.get("bundesland", "") or "")
+        bd = _dm_lookup.get((iso, bl)) or _dm_lookup.get((iso, "alle")) or ""
+        if not bd:
+            return ""
+        try:
+            return pd.Timestamp(bd).strftime("%d.%m.%Y")
+        except Exception:
+            return bd
+    agg["_basisdatum"] = agg.apply(_lookup_basisdatum, axis=1)
     agg["_tagesinfo"] = agg.apply(
         lambda r: _build_tagesinfo(
             r.get("tagestyp", ""), r.get("feiertag_name", ""), r.get("ferien_art", "")),
@@ -191,14 +226,18 @@ rename = {
 if zeit_ebene == "Tag":
     rename["Zeit"] = "Datum"
     rename["_wt_str"] = "Wochentag"
+    rename["_basisdatum"] = "Basisdatum"
     rename["_tagesinfo"] = "Tagesinfo"
 
 drop_cols = ["_sort", "eff_norm"] + [c for c in ["wochentag", "tagestyp", "feiertag_name", "ferien_art"]
                                       if c in agg.columns and zeit_ebene == "Tag"]
+# _basisdatum only meaningful in Tag view; drop in other views
+if zeit_ebene != "Tag" and "_basisdatum" in agg.columns:
+    drop_cols.append("_basisdatum")
 disp = agg.drop(columns=[c for c in drop_cols if c in agg.columns]).rename(columns=rename)
 
 if zeit_ebene == "Tag":
-    lead = [c for c in ["Filiale", "Bundesland", "Datum", "Wochentag", "Tagesinfo"] if c in disp.columns]
+    lead = [c for c in ["Filiale", "Bundesland", "Datum", "Basisdatum", "Wochentag", "Tagesinfo"] if c in disp.columns]
 else:
     lead = [c for c in ["Filiale", "Bundesland", "Zeit"] if c in disp.columns]
 ordered = lead + ["IST Basis", "+ Öffnung", "+ Verteilung", "+ Wochentag", "+ Preis",
@@ -270,6 +309,8 @@ if "Abw. IST %" in disp_fmt.columns:
     disp_fmt["Abw. IST %"] = disp_fmt["Abw. IST %"].apply(_fmt_pct)
 
 col_cfg = {
+    "Basisdatum":   st.column_config.TextColumn("Basisdatum",
+        help="Referenztag aus dem Basiszeitraum, dessen IST-Umsatz als Grundlage dient"),
     "IST Basis":    st.column_config.TextColumn("IST Basis",
         help="Tagesumsatz des Basiszeitraum-Referenztags (gleicher Wochentag, gleiches Monat im Vorjahr)"),
     "+ Öffnung":   st.column_config.TextColumn("+ Öffnung",

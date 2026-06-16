@@ -653,9 +653,23 @@ class PlanningEngine:
 
         budget = round(r["raw"] * norm, 2)
         eff_norm = budget - r["raw"]
-        eff_verteilung = r["tag_basis"] - r["ist_vj"]
-        eff_wochentag = r["tag_hoch"] - r["tag_basis"]
-        eff_preis = r["tag_plan"] - r["tag_hoch"]
+
+        if r["tagestyp"] == "ferien":
+            # For ferien days the ferien-factor path already captures the full
+            # deviation from ist_vj. Verteilung / Wochentag / Preis are
+            # artefacts of the normal-day path and must be 0 here so that
+            # Herleitung shows a clean decomposition. All effects relative to
+            # ist_vj are absorbed into eff_ferien (identity holds: ist_vj +
+            # eff_ferien + eff_norm = ist_vj + (raw-ist_vj) + (budget-raw) = budget).
+            eff_verteilung = 0.0
+            eff_wochentag = 0.0
+            eff_preis = 0.0
+            eff_ferien = r["raw"] - r["ist_vj"]
+        else:
+            eff_verteilung = r["tag_basis"] - r["ist_vj"]
+            eff_wochentag = r["tag_hoch"] - r["tag_basis"]
+            eff_preis = r["tag_plan"] - r["tag_hoch"]
+            eff_ferien = r["eff_ferien"]
 
         return DayPlan(
             fil_nr=fil_nr, datum=r["d"], wochentag=r["wt"], bundesland=bl,
@@ -664,7 +678,7 @@ class PlanningEngine:
             eff_verteilung=round(eff_verteilung, 2),
             eff_wochentag=round(eff_wochentag, 2),
             eff_preis=round(eff_preis, 2),
-            eff_ferien=round(r["eff_ferien"], 2),
+            eff_ferien=round(eff_ferien, 2),
             eff_feiertag=round(r["eff_feiertag"], 2),
             eff_norm=round(eff_norm, 2),
             budget=budget,

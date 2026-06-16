@@ -35,6 +35,13 @@
 - Filialen-Massenimport: Akzeptiert Bundesland als Abkürzung (BY), lang (Bayern) oder DE-BY (06/2026)
 - Herleitung: IST aktuell + Abw. IST € + Abw. IST % als letzte Spalten (06/2026)
 - Planungsgenauigkeit: Genauigkeit % Spalte (100%−|Abw%|); Analyse-Abschnitt mit Top-Abweichungen (06/2026)
+- Feiertage/Ferien: BL-Auswahllisten begrenzt auf in Filialen hinterlegte BL (06/2026)
+- Feiertage/Ferien: Wochentagsspalten neben Datumsspalten in allen 3 Tabs (06/2026)
+- Ferien: Automatische Wochenend-Verlängerung beim Laden (Fr/Sa-Ende → So; Mo-Start → Sa) (06/2026)
+- Ferien: Basiszeitraum-Vergleich im Budgetjahr-Tab (Start/Ende Basis, Wochentage, Abweichung) (06/2026)
+- Planung ausführen: Tabelle wird auch bei bereits gespeicherten Daten ohne Neu-Berechnung angezeigt (06/2026)
+- Herleitung: Basisdatum-Spalte (Referenztag im Basiszeitraum) im Tag-View (06/2026)
+- Engine: eff_verteilung/eff_wochentag/eff_preis = 0 für Ferien-Tage; alle Effekte in eff_ferien (06/2026)
 
 ---
 
@@ -44,7 +51,6 @@
 |---|-------|---------------|
 | 2 | **Sondertage-Legacy** abbauen: `sondertage`-Tabelle abschaffen, nur noch `feiertage` mit art='Sondertag' | Mittelfristig |
 | 4 | **Engine-Performance**: `_ist_on()` O(Tage×Zeilen). Lösung: Lookup-Dict `{(fil_nr, iso): umsatz}` einmalig bauen | Laufzeit |
-| 15 | **Herleitung: Verteilung bei direktem VJ-Vergleich** (Feiertag/Ferien/Sondertag): eff_verteilung soll 0 sein wenn direkter Feiertagsvergleich. Erfordert Engine-Änderung + Regressionstest-Update. | Mittelfristig |
 | 16 | **Herleitung: Neue Ferien ohne Vorjahreszeitraum**: eff_ferien via Durchschnitt der letzten verfügbaren Ferien-Perioden schätzen. Derzeit keine Periode → eff_ferien=0. | Mittelfristig |
 
 ---

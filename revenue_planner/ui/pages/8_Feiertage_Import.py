@@ -28,6 +28,24 @@ BL_ABBR_TO_NAME = {
 }
 BL_NAME_LIST = list(BL_ABBR_TO_NAME.values())
 
+WOCHENTAG_NAMEN = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+
+
+def _wt_name(d) -> str:
+    """Return German weekday name for a date/Timestamp/str, or empty string."""
+    if d is None:
+        return ""
+    try:
+        import pandas as _pd
+        if _pd.isna(d):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    try:
+        return WOCHENTAG_NAMEN[pd.Timestamp(d).weekday()]
+    except Exception:
+        return ""
+
 
 def _bl_to_name(bl: str) -> str:
     if not bl or str(bl).strip().lower() == "alle":
@@ -188,6 +206,24 @@ def _sondertage_rows(plan_yr: int, with_muttertag, with_fasching, with_ramadan) 
     return rows
 
 
+def _extend_ferien_weekend(start: date, ende: date) -> tuple[date, date]:
+    """Extend ferien period to include adjacent weekends.
+
+    - If ferien END on Friday → extend to include Saturday + Sunday
+    - If ferien END on Saturday → extend to include Sunday
+    - If ferien START on Monday → extend back to include preceding Saturday + Sunday
+    """
+    # Extend end
+    if ende.weekday() == 4:   # Friday → add Sat + Sun
+        ende = ende + timedelta(days=2)
+    elif ende.weekday() == 5:  # Saturday → add Sun
+        ende = ende + timedelta(days=1)
+    # Extend start
+    if start.weekday() == 0:   # Monday → go back to preceding Saturday
+        start = start - timedelta(days=2)
+    return start, ende
+
+
 def _load_schulferien_all_bl(years: list[int], bl_filter: list | None = None) -> list:
     """Load school holidays for given BL for given years from holidays library.
     Returns list of ferien_kalender rows (bundesland, art, jahr, start, ende)."""
@@ -220,12 +256,14 @@ def _load_schulferien_all_bl(years: list[int], bl_filter: list | None = None) ->
                     if (d - prev).days <= 1:
                         prev = d
                     else:
+                        start, prev = _extend_ferien_weekend(start, prev)
                         result.append({
                             "bundesland": bl, "art": art, "jahr": yr,
                             "start": start.isoformat(), "ende": prev.isoformat(),
                         })
                         start = d
                         prev = d
+                start, prev = _extend_ferien_weekend(start, prev)
                 result.append({
                     "bundesland": bl, "art": art, "jahr": yr,
                     "start": start.isoformat(), "ende": prev.isoformat(),
@@ -292,6 +330,7 @@ _fil_bls_abbr = list(dict.fromkeys(
 ))
 # Falls noch keine Filialen angelegt: alle 16 laden
 AKTIVE_BL = _fil_bls_abbr if _fil_bls_abbr else BUNDESLAENDER
+AKTIVE_BL_NAMES = [BL_ABBR_TO_NAME.get(b, b) for b in sorted(AKTIVE_BL)]
 
 # ── Abschnitt 1: Laden ───────────────────────────────────────────────────────
 st.subheader("1. Feiertage, Sondertage und Ferien laden")
@@ -386,7 +425,7 @@ with tab_ft:
     with fc1:
         filter_art = st.selectbox("Art", ["alle", "Feiertag", "Feiertagstag"], key="ft_art_filter")
     with fc2:
-        bl_options_ft = ["alle"] + BL_NAME_LIST
+        bl_options_ft = ["alle"] + AKTIVE_BL_NAMES
         filter_bl_ft = st.selectbox("Bundesland", bl_options_ft, key="ft_bl_filter")
 
     filter_art_raw = filter_art.lower()
@@ -409,6 +448,9 @@ with tab_ft:
     ft_orig["datum_vj"]   = pd.to_datetime(ft_orig["datum_vj"], errors="coerce")
     ft_orig["bundesland"] = ft_orig["bundesland"].apply(_bl_to_name)
     ft_orig["art"]        = ft_orig["art"].apply(lambda a: str(a).capitalize() if a else a)
+    # Weekday display columns (read-only)
+    ft_orig["wt_plan"] = ft_orig["datum_plan"].apply(_wt_name)
+    ft_orig["wt_vj"]   = ft_orig["datum_vj"].apply(_wt_name)
 
     edited_ft = st.data_editor(
         ft_orig.copy(),
@@ -418,9 +460,11 @@ with tab_ft:
         height=350,
         column_config={
             "bundesland": st.column_config.SelectboxColumn("Bundesland",
-                                                           options=["Alle"] + BL_NAME_LIST),
+                                                           options=["Alle"] + AKTIVE_BL_NAMES),
             "datum_plan": st.column_config.DateColumn("Datum Budget", format="DD.MM.YYYY"),
+            "wt_plan":    st.column_config.TextColumn("Wochentag Budget", disabled=True),
             "datum_vj":   st.column_config.DateColumn("Datum Basiszeitraum", format="DD.MM.YYYY"),
+            "wt_vj":      st.column_config.TextColumn("Wochentag Basis", disabled=True),
             "name":       st.column_config.TextColumn("Beschreibung"),
             "art":        st.column_config.SelectboxColumn("Art", options=["Feiertag", "Feiertagstag"]),
         },
@@ -428,8 +472,9 @@ with tab_ft:
     st.caption(f"{len(ft_orig)} Einträge für {filter_jahr}")
 
     _date_cols_ft = ["datum_plan", "datum_vj"]
-    if not _norm_for_compare(ft_orig, _date_cols_ft).equals(
-            _norm_for_compare(edited_ft, _date_cols_ft)):
+    _cmp_cols_ft = ["bundesland", "datum_plan", "datum_vj", "name", "art"]
+    if not _norm_for_compare(ft_orig[_cmp_cols_ft], _date_cols_ft).equals(
+            _norm_for_compare(edited_ft[_cmp_cols_ft], _date_cols_ft)):
         if filter_art_raw == "alle":
             conn.execute("DELETE FROM feiertage WHERE datum_plan LIKE ?", (f"{filter_jahr}-%",))
         else:
@@ -452,7 +497,7 @@ with tab_ft:
 with tab_st:
     fc1_st, fc2_st = st.columns(2)
     with fc2_st:
-        filter_bl_st = st.selectbox("Bundesland", ["alle"] + BL_NAME_LIST, key="st_bl_filter")
+        filter_bl_st = st.selectbox("Bundesland", ["alle"] + AKTIVE_BL_NAMES, key="st_bl_filter")
 
     st_all = pd.read_sql(
         "SELECT id, datum_plan, datum_referenz, bezeichnung, methode, bundesland FROM sondertage "
@@ -468,6 +513,9 @@ with tab_st:
     st_orig["datum_plan"]     = pd.to_datetime(st_orig["datum_plan"], errors="coerce")
     st_orig["datum_referenz"] = pd.to_datetime(st_orig["datum_referenz"], errors="coerce")
     st_orig["bundesland"]     = st_orig["bundesland"].apply(_bl_to_name)
+    # Weekday display columns (read-only)
+    st_orig["wt_plan"] = st_orig["datum_plan"].apply(_wt_name)
+    st_orig["wt_ref"]  = st_orig["datum_referenz"].apply(_wt_name)
 
     edited_st = st.data_editor(
         st_orig.copy(),
@@ -477,9 +525,11 @@ with tab_st:
         height=350,
         column_config={
             "bundesland":      st.column_config.SelectboxColumn("Bundesland",
-                                                                options=["Alle"] + BL_NAME_LIST),
+                                                                options=["Alle"] + AKTIVE_BL_NAMES),
             "datum_plan":      st.column_config.DateColumn("Datum Budget", format="DD.MM.YYYY"),
+            "wt_plan":         st.column_config.TextColumn("Wochentag Budget", disabled=True),
             "datum_referenz":  st.column_config.DateColumn("Datum Basiszeitraum", format="DD.MM.YYYY"),
+            "wt_ref":          st.column_config.TextColumn("Wochentag Basis", disabled=True),
             "bezeichnung":     st.column_config.TextColumn("Beschreibung"),
             "methode":         st.column_config.SelectboxColumn("Methode", options=["referenz", "samstag"]),
         },
@@ -487,8 +537,9 @@ with tab_st:
     st.caption(f"{len(st_orig)} Einträge für {filter_jahr}")
 
     _date_cols_st = ["datum_plan", "datum_referenz"]
-    if not _norm_for_compare(st_orig, _date_cols_st).equals(
-            _norm_for_compare(edited_st, _date_cols_st)):
+    _cmp_cols_st = ["bundesland", "datum_plan", "datum_referenz", "bezeichnung", "methode"]
+    if not _norm_for_compare(st_orig[_cmp_cols_st], _date_cols_st).equals(
+            _norm_for_compare(edited_st[_cmp_cols_st], _date_cols_st)):
         conn.execute("DELETE FROM sondertage WHERE datum_plan LIKE ?", (f"{filter_jahr}-%",))
         for _, row in edited_st.dropna(subset=["datum_plan", "bezeichnung"]).iterrows():
             conn.execute(
@@ -513,7 +564,7 @@ with tab_fer:
     )
     fc1_fer, fc2_fer = st.columns(2)
     with fc1_fer:
-        filter_bl_fer = st.selectbox("Bundesland", ["alle"] + BL_NAME_LIST, key="fer_bl_filter")
+        filter_bl_fer = st.selectbox("Bundesland", ["alle"] + AKTIVE_BL_NAMES, key="fer_bl_filter")
     with fc2_fer:
         filter_jahr_fer = st.selectbox(
             "Jahr", [vj, planjahr],
@@ -536,19 +587,84 @@ with tab_fer:
     fk_orig["ende"]  = pd.to_datetime(fk_orig["ende"], errors="coerce")
     fk_orig["bundesland"] = fk_orig["bundesland"].apply(_bl_to_name)
 
+    # Weekday columns (read-only)
+    fk_orig["wt_start"] = fk_orig["start"].apply(_wt_name)
+    fk_orig["wt_ende"]  = fk_orig["ende"].apply(_wt_name)
+
+    # For plan year: load base year dates for same BL+art to allow comparison
+    col_cfg_fk: dict = {
+        "bundesland": st.column_config.SelectboxColumn("Bundesland",
+                                                       options=["Alle"] + AKTIVE_BL_NAMES),
+        "start":    st.column_config.DateColumn("Start", format="DD.MM.YYYY"),
+        "wt_start": st.column_config.TextColumn("Wochentag Start", disabled=True),
+        "ende":     st.column_config.DateColumn("Ende", format="DD.MM.YYYY"),
+        "wt_ende":  st.column_config.TextColumn("Wochentag Ende", disabled=True),
+        "art":      st.column_config.TextColumn("Beschreibung (z.B. Sommerferien)"),
+    }
+
+    if filter_jahr_fer == planjahr:
+        vj_rows_fer = pd.read_sql(
+            "SELECT bundesland, art, start, ende FROM ferien_kalender WHERE jahr=?",
+            conn, params=[vj],
+        )
+        # Index for fast lookup
+        vj_lookup_fer = {
+            (_bl_to_name(r["bundesland"]), r["art"]): (r["start"], r["ende"])
+            for _, r in vj_rows_fer.iterrows()
+        }
+
+        def _fer_abweichung(row) -> str:
+            key = (row["bundesland"], row["art"])
+            vj_pair = vj_lookup_fer.get(key)
+            if not vj_pair:
+                return "kein Vorjahreseintrag"
+            vj_s = pd.Timestamp(vj_pair[0])
+            vj_e = pd.Timestamp(vj_pair[1])
+            plan_s = row["start"]
+            plan_e = row["ende"]
+            if pd.isna(plan_s) or pd.isna(plan_e):
+                return ""
+            diff_start = int((plan_s - vj_s).days)
+            diff_ende  = int((plan_e - vj_e).days)
+            if diff_start == 0 and diff_ende == 0:
+                return "0"
+            parts = []
+            if diff_start != 0:
+                parts.append(f"Start {'+' if diff_start > 0 else ''}{diff_start} Tage")
+            if diff_ende != 0:
+                parts.append(f"Ende {'+' if diff_ende > 0 else ''}{diff_ende} Tage")
+            return ", ".join(parts)
+
+        fk_orig["start_basis"] = fk_orig.apply(
+            lambda r: pd.Timestamp(vj_lookup_fer[(r["bundesland"], r["art"])][0])
+            if (r["bundesland"], r["art"]) in vj_lookup_fer else pd.NaT, axis=1)
+        fk_orig["wt_start_basis"] = fk_orig["start_basis"].apply(_wt_name)
+        fk_orig["ende_basis"] = fk_orig.apply(
+            lambda r: pd.Timestamp(vj_lookup_fer[(r["bundesland"], r["art"])][1])
+            if (r["bundesland"], r["art"]) in vj_lookup_fer else pd.NaT, axis=1)
+        fk_orig["wt_ende_basis"] = fk_orig["ende_basis"].apply(_wt_name)
+        fk_orig["abweichung"] = fk_orig.apply(_fer_abweichung, axis=1)
+
+        col_cfg_fk.update({
+            "start_basis":    st.column_config.DateColumn("Start Basis", format="DD.MM.YYYY",
+                                                          disabled=True),
+            "wt_start_basis": st.column_config.TextColumn("Wochentag Start Basis", disabled=True),
+            "ende_basis":     st.column_config.DateColumn("Ende Basis", format="DD.MM.YYYY",
+                                                          disabled=True),
+            "wt_ende_basis":  st.column_config.TextColumn("Wochentag Ende Basis", disabled=True),
+            "abweichung":     st.column_config.TextColumn("Abweichung", disabled=True),
+        })
+
     edited_fk = st.data_editor(
         fk_orig.copy(),
         use_container_width=True, hide_index=True,
         num_rows="dynamic",
         key=f"fk_editor_{planjahr}_{filter_bl_fer}_{filter_jahr_fer}",
-        height=350,
-        column_config={
-            "bundesland": st.column_config.SelectboxColumn("Bundesland",
-                                                           options=["Alle"] + BL_NAME_LIST),
-            "start": st.column_config.DateColumn("Start", format="DD.MM.YYYY"),
-            "ende":  st.column_config.DateColumn("Ende", format="DD.MM.YYYY"),
-            "art":   st.column_config.TextColumn("Beschreibung (z.B. Sommerferien)"),
-        },
+        height=400,
+        column_config=col_cfg_fk,
+        disabled=[c for c in ["wt_start", "wt_ende", "start_basis", "wt_start_basis",
+                               "ende_basis", "wt_ende_basis", "abweichung"]
+                  if c in fk_orig.columns],
     )
     n_total = conn.execute(
         "SELECT COUNT(*) AS n FROM ferien_kalender WHERE jahr=? OR jahr=?", (vj, planjahr)
@@ -560,8 +676,10 @@ with tab_fer:
     st.caption(f"{len(fk_orig)} Einträge angezeigt · {n_total} gesamt ({n_bl} Bundesländer) für {vj}+{planjahr}")
 
     _date_cols_fk = ["start", "ende"]
-    if not _norm_for_compare(fk_orig, _date_cols_fk).equals(
-            _norm_for_compare(edited_fk, _date_cols_fk)):
+    _cmp_cols_fk = ["bundesland", "start", "ende", "art"]
+    if not _norm_for_compare(fk_orig[_cmp_cols_fk], _date_cols_fk).equals(
+            _norm_for_compare(edited_fk[[c for c in _cmp_cols_fk if c in edited_fk.columns]],
+                              _date_cols_fk)):
         # Only delete/reinsert for the displayed year + BL filter
         if filter_bl_fer == "alle":
             conn.execute("DELETE FROM ferien_kalender WHERE jahr=?", (filter_jahr_fer,))
