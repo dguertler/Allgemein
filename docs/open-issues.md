@@ -25,6 +25,16 @@
 - Feiertage-UI: BL-Filter, Spaltenumbenennung, Sortierung BL→Datum (06/2026)
 - Datumsmapping: base_bezeichnung für Feiertagstage befüllt (06/2026)
 - Validierung: Feiertage/Sondertage/Ferientage Vergleich Basis vs. Budget (06/2026)
+- Budgetjahr: Auto-Korrektur in Sidebar wenn gespeichertes Jahr nicht in DB (06/2026)
+- Planung: Alle planung-Zeilen des Jahres vor neuem Berechnungslauf gelöscht (06/2026)
+- Datumsmapping: BL-Normalisierung → Heilige Drei Könige und BL-spezifische Feiertage jetzt korrekt (06/2026)
+- Datumsmapping: stichtag-Fix → Basistag ≠ Budgettag für Planjahr = laufendes Jahr (06/2026)
+- Datumsmapping: Separate Ferien-Spalten für Budget- und Basiszeitraum (06/2026)
+- Feiertage/Ferien: Nur BL laden, die in Filialen-Stammdaten vorhanden; Erklärungstext (06/2026)
+- Validierung: Feiertags-/Ferienvergleich nur für relevante BL (mit Filialen) (06/2026)
+- Filialen-Massenimport: Akzeptiert Bundesland als Abkürzung (BY), lang (Bayern) oder DE-BY (06/2026)
+- Herleitung: IST aktuell + Abw. IST € + Abw. IST % als letzte Spalten (06/2026)
+- Planungsgenauigkeit: Genauigkeit % Spalte (100%−|Abw%|); Analyse-Abschnitt mit Top-Abweichungen (06/2026)
 
 ---
 
@@ -33,8 +43,9 @@
 | # | Thema | Risiko/Nutzen |
 |---|-------|---------------|
 | 2 | **Sondertage-Legacy** abbauen: `sondertage`-Tabelle abschaffen, nur noch `feiertage` mit art='Sondertag' | Mittelfristig |
-| 3 | **BL-Normalisierung an der Quelle**: beim Anlegen/Editieren von Filialen normalisieren | Konsistenz |
 | 4 | **Engine-Performance**: `_ist_on()` O(Tage×Zeilen). Lösung: Lookup-Dict `{(fil_nr, iso): umsatz}` einmalig bauen | Laufzeit |
+| 15 | **Herleitung: Verteilung bei direktem VJ-Vergleich** (Feiertag/Ferien/Sondertag): eff_verteilung soll 0 sein wenn direkter Feiertagsvergleich. Erfordert Engine-Änderung + Regressionstest-Update. | Mittelfristig |
+| 16 | **Herleitung: Neue Ferien ohne Vorjahreszeitraum**: eff_ferien via Durchschnitt der letzten verfügbaren Ferien-Perioden schätzen. Derzeit keine Periode → eff_ferien=0. | Mittelfristig |
 
 ---
 
