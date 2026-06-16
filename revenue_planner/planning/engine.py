@@ -269,6 +269,7 @@ class PlanningEngine:
     def _build_ferien_windows(self):
         """Mappe Plan-Ferientage → (bundesland, art, wochenindex). Puffer separat (VJ-Berechnung)."""
         self.ferien_plan_dates: dict[str, dict[str, tuple[str, int]]] = {}  # iso → {bl: (art, woche)}
+        self.ferien_vj_dates: set[str] = set()  # alle VJ-Ferientage (für direkte Vergleichsprüfung)
         for f in self.ferien_plan:
             bl = f["bundesland"]
             art = f["art"]
@@ -277,6 +278,11 @@ class PlanningEngine:
             for d in _date_range(start, ende):
                 woche = (d - start).days // 7 + 1
                 self.ferien_plan_dates.setdefault(d.isoformat(), {})[bl] = (art, woche)
+            # VJ-Ferientage für direkten Vergleich tracken
+            vj_start = date.fromisoformat(f["start_vj"])
+            vj_ende = date.fromisoformat(f["ende_vj"])
+            for d in _date_range(vj_start, vj_ende):
+                self.ferien_vj_dates.add(d.isoformat())
 
     # ── Per-branch IST helpers (Basiszeitraum) ────────────────────────────
 
@@ -588,6 +594,7 @@ class PlanningEngine:
         eff_ferien = 0.0
         eff_feiertag = 0.0
         raw = tag_plan
+        direct_ferien = False
 
         if m["tagestyp"] == "feiertag":
             ft = m["ft"]
@@ -605,13 +612,23 @@ class PlanningEngine:
                 raw = 0.0
             eff_feiertag = raw - tag_plan
         elif m["tagestyp"] == "ferien":
-            ff = self._ferien_faktor_woche(fil_nr, bl, m["ferien_art"], m["ferien_woche"])
-            raw = round(tag_plan * ff, 2)
-            eff_ferien = raw - tag_plan
+            base_iso = _base_d.isoformat() if _base_d else None
+            if base_iso and base_iso in self.ferien_vj_dates:
+                # Direkter Ferien-zu-Ferien-Vergleich: ist_vj (VJ-Ferientag) × Wachstum.
+                # Kein Ferienfaktor nötig, da ferien-Effekt schon in ist_vj enthalten.
+                raw = round(ist_vj * growth, 2)
+                eff_ferien = 0.0
+                direct_ferien = True
+            else:
+                # Kein VJ-Ferien-Äquivalent für diesen Wochentag → Ferienfaktor anwenden
+                ff = self._ferien_faktor_woche(fil_nr, bl, m["ferien_art"], m["ferien_woche"])
+                raw = round(tag_plan * ff, 2)
+                eff_ferien = raw - tag_plan
 
         return {**m, "ist_vj": ist_vj, "tag_basis": tag_basis, "tag_hoch": tag_hoch,
                 "tag_plan": tag_plan, "raw": raw, "eff_ferien": eff_ferien,
-                "eff_feiertag": eff_feiertag}
+                "eff_feiertag": eff_feiertag, "_direct_ferien": direct_ferien,
+                "_growth": growth}
 
     @staticmethod
     def _normalize_month(rows: list[dict], monat_plan: float) -> float:
@@ -654,17 +671,15 @@ class PlanningEngine:
         budget = round(r["raw"] * norm, 2)
         eff_norm = budget - r["raw"]
 
-        if r["tagestyp"] == "ferien":
-            # For ferien days the ferien-factor path already captures the full
-            # deviation from ist_vj. Verteilung / Wochentag / Preis are
-            # artefacts of the normal-day path and must be 0 here so that
-            # Herleitung shows a clean decomposition. All effects relative to
-            # ist_vj are absorbed into eff_ferien (identity holds: ist_vj +
-            # eff_ferien + eff_norm = ist_vj + (raw-ist_vj) + (budget-raw) = budget).
+        if r.get("_direct_ferien"):
+            # Direkter Ferien-zu-Ferien-Vergleich: raw = ist_vj × growth.
+            # Verteilung und Wochentag entfallen (direkter Tagesvergleich);
+            # Preis = ist_vj × (growth - 1). Identität: ist_vj + eff_preis + eff_norm = budget.
+            g = r.get("_growth", 1.0)
             eff_verteilung = 0.0
             eff_wochentag = 0.0
-            eff_preis = 0.0
-            eff_ferien = r["raw"] - r["ist_vj"]
+            eff_preis = round(r["ist_vj"] * (g - 1), 2)
+            eff_ferien = 0.0
         else:
             eff_verteilung = r["tag_basis"] - r["ist_vj"]
             eff_wochentag = r["tag_hoch"] - r["tag_basis"]

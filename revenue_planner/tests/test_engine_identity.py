@@ -68,12 +68,23 @@ def test_normalize_bl():
 
 
 def test_ferien_effect_applied(engine):
-    """BW branches have a real (non-zero) ferien effect during Osterferien 2026.
+    """BW Osterferien 2026 map directly to VJ Osterferien 2025 → eff_ferien = 0.
 
-    The fixture dips IST revenue by 40% during the prior-year Osterferien,
-    so the per-week ferien factor must produce negative eff_ferien days.
+    With direct ferien-to-ferien comparison, ist_vj already reflects the
+    depressed ferien IST (40% dip in fixture) so no additional ferien factor
+    is applied. The ferien effect is implicitly captured in the low ist_vj.
     """
     plans = engine.plan_branch("0002")
     fer_days = [p for p in plans if p.tagestyp == "ferien"]
     assert fer_days, "no ferien days planned for BW branch"
-    assert any(p.eff_ferien < 0 for p in fer_days), "ferien factor had no effect"
+    assert all(p.eff_ferien == 0.0 for p in fer_days), (
+        "ferien days with direct VJ match must have eff_ferien=0"
+    )
+    from .conftest import WEEKDAY_REVENUE, BRANCH_FACTORS
+    avg_ist = sum(p.ist_vj for p in fer_days if p.ist_vj > 0) / max(
+        sum(1 for p in fer_days if p.ist_vj > 0), 1
+    )
+    avg_normal = sum(WEEKDAY_REVENUE[wt] * BRANCH_FACTORS["0002"] for wt in range(6)) / 6
+    assert avg_ist < avg_normal * 0.75, (
+        f"ferien ist_vj ({avg_ist:.0f}) should be depressed vs normal ({avg_normal:.0f})"
+    )
