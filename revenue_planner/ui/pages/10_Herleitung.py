@@ -154,9 +154,12 @@ elif entity_ebene == "Bundesland":
 
 extra_agg = {}
 if zeit_ebene == "Tag":
-    for c in ["wochentag", "tagestyp", "feiertag_name", "ferien_art", "bundesland"]:
+    for c in ["wochentag", "tagestyp", "feiertag_name", "ferien_art"]:
         if c in df_all.columns:
             extra_agg[c] = "first"
+    # bundesland only in extra_agg for Filiale entity (for Bundesland it's a group key already)
+    if entity_ebene == "Filiale" and "bundesland" in df_all.columns:
+        extra_agg["bundesland"] = "first"
 
 # Budget up to last imported day (for Abw. IST comparison)
 if _last_ist_date:
@@ -254,9 +257,9 @@ if zeit_ebene != "Tag" and "_basisdatum" in agg.columns:
 disp = agg.drop(columns=[c for c in drop_cols if c in agg.columns]).rename(columns=rename)
 
 if zeit_ebene == "Tag":
-    lead = [c for c in ["Filiale", "Bundesland", "Datum", "Basisdatum", "Wt.", "Tagesinfo", "Ferien"] if c in disp.columns]
+    lead = [c for c in ["Filiale", "Datum", "Basisdatum", "Wt.", "Tagesinfo", "Ferien"] if c in disp.columns]
 else:
-    lead = [c for c in ["Filiale", "Bundesland", "Zeit"] if c in disp.columns]
+    lead = [c for c in ["Filiale", "Zeit"] if c in disp.columns]
 ordered = lead + ["IST Basis", "+ Öffnung", "+ Verteilung", "+ Wochentag", "+ Preis",
                   "+ Ferien", "+ Feiertag", "= Budget",
                   "= IST", "Abw. €", "Abw. %"]

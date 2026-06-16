@@ -13,11 +13,27 @@ conn = get_conn()
 planjahr = get_budgetjahr()
 vj = planjahr - 1
 
+# One-time migration: rename old ferien art labels in ferien_kalender + ferien tables
+_FERIEN_RENAME_MIGRATION = {
+    "Oster-/Frühjahrferien": "Osterferien",
+    "Himmelfahrts-/Pfingstferien": "Pfingstferien",
+}
+for _old, _new in _FERIEN_RENAME_MIGRATION.items():
+    conn.execute("UPDATE ferien_kalender SET art=? WHERE art=?", (_new, _old))
+    conn.execute("UPDATE ferien SET art=? WHERE art=?", (_new, _old))
+conn.commit()
+
 st.title("Feiertage und Ferien laden")
 st.caption(f"Firma: **{get_gmbh()}** · Budgetjahr: **{planjahr}** · Basiszeitraum (Vorjahr): **{vj}**")
 
 BUNDESLAENDER = ["BB", "BE", "BW", "BY", "HB", "HE", "HH", "MV",
                  "NI", "NW", "RP", "SH", "SL", "SN", "ST", "TH"]
+
+# Rename overlong ferien art labels from the holidays library to short display names
+FERIEN_ART_RENAME: dict[str, str] = {
+    "Oster-/Frühjahrferien": "Osterferien",
+    "Himmelfahrts-/Pfingstferien": "Pfingstferien",
+}
 
 BL_ABBR_TO_NAME = {
     "BB": "Brandenburg", "BE": "Berlin", "BW": "Baden-Württemberg",
@@ -265,7 +281,8 @@ def _load_schulferien_all_bl(years: list[int], bl_filter: list | None = None) ->
             for d, name in school_hols.items():
                 by_name.setdefault(name, []).append(d)
 
-            for art, dates in by_name.items():
+            for art_raw, dates in by_name.items():
+                art = FERIEN_ART_RENAME.get(art_raw, art_raw)
                 dates = sorted(dates)
                 # Consecutive = gap of at most 1 day (handles adjacent periods)
                 start = dates[0]
@@ -376,6 +393,40 @@ with col_opt2:
     replace_existing   = st.checkbox("Bestehende Einträge ersetzen", value=True)
 
 if st.button("🔄 Feiertage, Sondertage und Ferien laden", type="primary"):
+    # Check for existing manual data before overwriting
+    _n_ft = conn.execute(
+        "SELECT COUNT(*) FROM feiertage WHERE datum_plan LIKE ? OR datum_plan LIKE ?",
+        (f"{vj}-%", f"{planjahr}-%"),
+    ).fetchone()[0]
+    _n_st = conn.execute(
+        "SELECT COUNT(*) FROM sondertage WHERE datum_plan LIKE ? OR datum_plan LIKE ?",
+        (f"{vj}-%", f"{planjahr}-%"),
+    ).fetchone()[0]
+    _n_fk = conn.execute(
+        "SELECT COUNT(*) FROM ferien_kalender WHERE jahr=? OR jahr=?",
+        (vj, planjahr),
+    ).fetchone()[0]
+    if replace_existing and (_n_ft + _n_st + _n_fk) > 0:
+        st.session_state["_fk_confirm_laden"] = True
+    else:
+        st.session_state["_fk_do_laden"] = True
+
+if st.session_state.get("_fk_confirm_laden"):
+    st.warning(
+        f"Es existieren bereits Feiertage, Sondertage und Ferien für "
+        f"**{vj}** und **{planjahr}**. Wirklich neu laden und überschreiben?"
+    )
+    _c1, _c2, _ = st.columns([1.5, 1, 5])
+    if _c1.button("✅ Ja, überschreiben", type="primary", key="_fk_confirm_yes"):
+        st.session_state["_fk_confirm_laden"] = False
+        st.session_state["_fk_do_laden"] = True
+        st.rerun()
+    if _c2.button("❌ Abbrechen", key="_fk_confirm_no"):
+        st.session_state["_fk_confirm_laden"] = False
+        st.rerun()
+
+if st.session_state.get("_fk_do_laden"):
+    st.session_state["_fk_do_laden"] = False
     with st.spinner("Lade …"):
         try:
             load_years = [vj, planjahr]

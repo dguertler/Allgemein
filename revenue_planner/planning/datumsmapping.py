@@ -5,11 +5,13 @@ the correct reference day in the rolling base year using:
   1. Feiertag (art='feiertag') → same-named holiday in base year via datum_vj
   2. Feiertagstag (art='feiertagstag') → ISO-KW mapping (treated as normal by engine)
   3. Sondertag → datum_referenz from sondertage table
-  4. Ferien week N → same week N in VJ period (weekday-matched)
+  4. Ferien week N → same week N in VJ period (weekday-matched, same month only)
   5. Normal → same ISO-KW + weekday in base year
 
 Description priority (combined): Feiertag > Feiertagstag > Sondertag > Ferien
 Feiertagstage are labelled simply "Feiertagstag" (not the full holiday name).
+Feiertagstag priority overrides Ferien: a day that falls in Ferien but is also
+a Feiertagstag uses the Feiertagstag base date (parent holiday VJ + offset).
 """
 from __future__ import annotations
 
@@ -84,6 +86,7 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                 plan_typ = "normal"
                 mapping_art = "iso_kw"
                 base_d: date | None = None
+                _used_iso_kw = False
 
                 # 1. Feiertag (art='feiertag')
                 ft = engine._relevant_feiertag(iso, bl)
@@ -105,9 +108,9 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                             break
                     if ft_tag:
                         plan_typ = "feiertagstag"
+                        mapping_art = "feiertagstag"
                         bezeichnung_parts.append("Feiertagstag")
                         base_bezeichnung_parts.append("Feiertagstag")
-                        # Use stored datum_vj (parent holiday VJ + offset) as base date
                         if ft_tag.get("datum_vj"):
                             try:
                                 base_d = date.fromisoformat(ft_tag["datum_vj"])
@@ -146,22 +149,42 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                             wk_start = vj_start + timedelta(weeks=woche - 1)
                             delta = wt - wk_start.weekday()
                             base_d_candidate = wk_start + timedelta(days=delta)
-                            # Only use candidate if it falls within the VJ ferien period.
-                            # If outside (clamping would occur), fall through to ISO-KW fallback
-                            # to avoid mapping multiple plan weekdays to the same base date.
-                            if vj_start <= base_d_candidate <= vj_ende:
+                            # Only use candidate if it falls within the VJ ferien period
+                            # AND stays in the same calendar month as the plan day
+                            # (prevents year-boundary crossings for Weihnachtsferien Jan days).
+                            if (vj_start <= base_d_candidate <= vj_ende
+                                    and base_d_candidate.month == plan_d.month):
                                 base_d = base_d_candidate
+
+                    # 4.5. Feiertagstag override for ferien days:
+                    # A day that is in Ferien but also a Feiertagstag uses
+                    # the Feiertagstag base date instead of the ferien base date.
+                    if plan_typ == "ferien":
+                        ft_tag2 = None
+                        for entry in engine.feiertage.get(iso, []):
+                            if entry["bundesland"] in ("alle", bl) and entry.get("art") == "feiertagstag":
+                                ft_tag2 = entry
+                                break
+                        if ft_tag2:
+                            plan_typ = "feiertagstag"
+                            mapping_art = "feiertagstag"
+                            bezeichnung_parts.append("Feiertagstag")
+                            base_bezeichnung_parts.append("Feiertagstag")
+                            base_d = None
+                            if ft_tag2.get("datum_vj"):
+                                try:
+                                    base_d = date.fromisoformat(ft_tag2["datum_vj"])
+                                except (ValueError, TypeError):
+                                    pass
 
                 # 5. Fallback: ISO-KW
                 if base_d is None:
                     base_d = _date_from_iso_week(by, iso_week, wt)
+                    _used_iso_kw = True
 
-                # 6. Override: Dec 24 and Dec 31 always compare to same calendar date in base year
-                if month == 12 and day in (24, 31):
-                    base_d = _safe_date(by, 12, day) or base_d
-
-                # 6. For normal/feiertagstag days: avoid landing on a VJ holiday or vacation
-                if plan_typ in ("normal", "feiertagstag") and base_d is not None:
+                # 6. For normal/feiertagstag days and ferien days that fell back to ISO-KW:
+                # avoid landing on a VJ holiday or vacation
+                if plan_typ in ("normal", "feiertagstag") or (plan_typ == "ferien" and _used_iso_kw):
                     base_iso = base_d.isoformat()
                     _is_vj_holiday = any(
                         fe.get("art") == "feiertag" and fe["bundesland"] in ("alle", bl)
@@ -184,6 +207,11 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                             else:
                                 continue
                             break
+
+                # 7. Dec 24 and Dec 31 always compare to same calendar date in base year
+                # (placed last so holiday avoidance above cannot shift them away)
+                if month == 12 and day in (24, 31):
+                    base_d = _safe_date(by, 12, day) or base_d
 
                 bezeichnung = ", ".join(bezeichnung_parts)
                 base_bezeichnung = ", ".join(base_bezeichnung_parts)
