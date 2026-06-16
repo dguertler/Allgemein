@@ -36,33 +36,7 @@ TYP_LABELS = {
     "normal":      "Normaltag",
 }
 
-col1, col2 = st.columns([2, 1])
-with col1:
-    st.subheader(f"Mapping für Budgetjahr {planjahr}")
-with col2:
-    if st.button("🔄 Mapping generieren", type="primary", use_container_width=True):
-        with st.spinner("Generiere Datumsmapping…"):
-            try:
-                from planning.engine import PlanningEngine, PlanParams
-                from planning.datumsmapping import generate_datumsmapping
-
-                par_row = conn.execute(
-                    "SELECT * FROM parameter WHERE planjahr = ?", (planjahr,)
-                ).fetchone()
-                _today_dm = _date.today()
-                _stichtag_dm = _date(_today_dm.year, 1, 1) if planjahr <= _today_dm.year else _today_dm
-                params = PlanParams(
-                    planjahr=planjahr,
-                    stichtag=_stichtag_dm,
-                    preiserhoehung_pct=float(par_row["preiserhoehung_pct"] or 0) if par_row else 0,
-                    ferien_puffer_wochen=int(par_row["ferien_puffer_wochen"] or 2) if par_row else 2,
-                )
-                engine = PlanningEngine(conn, params)
-                n = generate_datumsmapping(conn, planjahr, engine)
-                st.success(f"{n:,} Mapping-Zeilen generiert.")
-                st.rerun()
-            except Exception as ex:
-                st.error(f"Fehler: {ex}")
+st.subheader(f"Mapping für Budgetjahr {planjahr}")
 
 # ── Daten laden ──────────────────────────────────────────────────────────────
 df = pd.read_sql(
@@ -176,7 +150,24 @@ display.columns = [
     "Mapping-Art",
 ]
 
-st.dataframe(display, use_container_width=True, hide_index=True, height=500)
+st.dataframe(
+    display,
+    use_container_width=True,
+    hide_index=True,
+    height=500,
+    column_config={
+        "Bundesland":          st.column_config.TextColumn("Bundesland", width="small"),
+        "Budgettag":           st.column_config.TextColumn("Budgettag", width="small"),
+        "Wochentag":           st.column_config.TextColumn("Wt.", width="small"),
+        "Beschreibung Budget": st.column_config.TextColumn("Beschreibung Budget"),
+        "Ferien Budget":       st.column_config.TextColumn("Ferien Budget", width="small"),
+        "Basistag":            st.column_config.TextColumn("Basistag", width="small"),
+        "Wochentag ":          st.column_config.TextColumn("Wt. ", width="small"),
+        "Beschreibung Basistag": st.column_config.TextColumn("Beschreibung Basistag"),
+        "Ferien Basis":        st.column_config.TextColumn("Ferien Basis", width="small"),
+        "Mapping-Art":         st.column_config.TextColumn("Mapping-Art", width="small"),
+    },
+)
 st.caption(
     f"{len(display):,} Zeilen angezeigt von {len(df):,} gesamt. &nbsp;"
     "**Mapping-Art:** "

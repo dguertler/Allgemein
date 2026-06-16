@@ -42,6 +42,17 @@
 - Planung ausführen: Tabelle wird auch bei bereits gespeicherten Daten ohne Neu-Berechnung angezeigt (06/2026)
 - Herleitung: Basisdatum-Spalte (Referenztag im Basiszeitraum) im Tag-View (06/2026)
 - Engine: eff_verteilung/eff_wochentag/eff_preis = 0 für Ferien-Tage; alle Effekte in eff_ferien (06/2026)
+- IST-Import: Alle bisherigen Daten werden beim Neuimport vollständig gelöscht (06/2026)
+- Feiertage-Tab: Art-Spalte und Art-Filter entfernt; Wochentag als Kurzform (Mo/Di/…); Spaltenbreiten angepasst (06/2026)
+- Sondertage-Tab: Bundesland-Filter und Methode-Spalte entfernt; Kurzform Wochentag; Spaltenbreiten (06/2026)
+- Ferien-Tab: Bundesland-Filter entfernt; Beschreibung-Spalte direkt nach Bundesland; Kurzform Wochentag; 0-Abweichung leer (06/2026)
+- Feiertagstage: Keine Feiertagstage für fixe Datumsfeiertage (1.1, 6.1, 1.5, 3.10, 1.11, 25./26.12); Himmelfahrt+Fronleichnam: Sa+So als Feiertagstage (06/2026)
+- Datumsmapping: Ferien-Namen nicht mehr in Bezeichnung-Spalte (separate Ferien-Spalten); Button "Mapping generieren" entfernt; Spaltenbreiten angepasst (06/2026)
+- Datumsmapping: Feiertagstage verwenden nun datum_vj als Basistag (korrekte Ostern-Offset-Vergleiche) (06/2026)
+- Datumsmapping: Normale Tage vermeiden VJ-Feiertags- und Ferientage als Basistag (06/2026)
+- Preisanpassung: Planjahr-Auswahl entfernt; immer das aktuelle Budgetjahr (06/2026)
+- Herleitung: Δ€/Δ% nach =Budget entfernt; keine Zeilenmarkierung; Abw. IST nur bis letzten importierten Tag (06/2026)
+- Engine: eff_feiertag=0 für offene Feiertage (wie direct_ferien-Behandlung: Vergleich Feiertag↔Feiertag) (06/2026)
 
 ---
 

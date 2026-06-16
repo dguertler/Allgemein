@@ -68,6 +68,11 @@ def _base_datum_for(row) -> str:
     except Exception:
         return bd
 
+# Last imported day for IST comparison limit
+_last_ist_date = conn.execute(
+    "SELECT MAX(datum) FROM ist_umsatz WHERE datum LIKE ?", (f"{planjahr}-%",)
+).fetchone()[0] or ""
+
 df_all["ist_aktuell"] = df_all.apply(
     lambda r: _ist_lookup_hrl.get((str(r["fil_nr"]), r["datum"].strftime("%Y-%m-%d"))),
     axis=1
@@ -153,9 +158,19 @@ if zeit_ebene == "Tag":
         if c in df_all.columns:
             extra_agg[c] = "first"
 
+# Budget up to last imported day (for Abw. IST comparison)
+if _last_ist_date:
+    df_all["_budget_for_ist"] = df_all.apply(
+        lambda r: r["budget"] if r["datum"].strftime("%Y-%m-%d") <= _last_ist_date else None,
+        axis=1
+    )
+else:
+    df_all["_budget_for_ist"] = None
+
 agg = (df_all.groupby([k for k in group_keys if k != "_sort"], as_index=False)
        .agg({**{c: "sum" for c in eff_cols},
              "ist_aktuell": lambda x: x.sum() if x.notna().any() else None,
+             "_budget_for_ist": lambda x: x.sum() if x.notna().any() else None,
              "_sort": "min", **extra_agg})
        .sort_values([k for k in (["_sort"] if entity_ebene == "Gesamt"
                                   else [group_keys[0], "_sort"])]))
@@ -183,7 +198,6 @@ if zeit_ebene == "Tag":
     if "wochentag" in agg.columns:
         agg["_wt_str"] = agg["wochentag"].apply(
             lambda w: WT_MAP[int(w)] if pd.notna(w) else "")
-    # Basisdatum aus Datumsmapping (Zeit ist "DD.MM.YYYY" → ISO umrechnen)
     def _lookup_basisdatum(row) -> str:
         try:
             iso = pd.Timestamp(row["Zeit"], dayfirst=True).strftime("%Y-%m-%d")
@@ -203,16 +217,14 @@ if zeit_ebene == "Tag":
             r.get("tagestyp", ""), r.get("feiertag_name", ""), r.get("ferien_art", "")),
         axis=1)
 
-agg["Δ €"] = agg["budget"] - agg["ist_vj"]
-agg["Δ %"] = agg.apply(lambda x: round(x["Δ €"] / x["ist_vj"] * 100, 1) if x["ist_vj"] else None, axis=1)
-# IST aktuell vs. Budget — nur für Tage mit importiertem IST
+# IST aktuell vs. Budget — nur bis zum letzten importierten Tag
 agg["Abw. IST €"] = agg.apply(
-    lambda x: round(float(x["ist_aktuell"]) - float(x["budget"]), 2)
-    if not pd.isna(x["ist_aktuell"]) else None, axis=1
+    lambda x: round(float(x["ist_aktuell"]) - float(x["_budget_for_ist"]), 2)
+    if not pd.isna(x["ist_aktuell"]) and not pd.isna(x.get("_budget_for_ist")) else None, axis=1
 )
 agg["Abw. IST %"] = agg.apply(
-    lambda x: round(float(x["Abw. IST €"]) / float(x["budget"]) * 100, 1)
-    if not pd.isna(x.get("Abw. IST €")) and float(x.get("budget", 0) or 0) != 0 else None,
+    lambda x: round(float(x["Abw. IST €"]) / float(x["_budget_for_ist"]) * 100, 1)
+    if not pd.isna(x.get("Abw. IST €")) and float(x.get("_budget_for_ist", 0) or 0) != 0 else None,
     axis=1
 )
 
@@ -229,9 +241,10 @@ if zeit_ebene == "Tag":
     rename["_basisdatum"] = "Basisdatum"
     rename["_tagesinfo"] = "Tagesinfo"
 
-drop_cols = ["_sort", "eff_norm"] + [c for c in ["wochentag", "tagestyp", "feiertag_name", "ferien_art"]
-                                      if c in agg.columns and zeit_ebene == "Tag"]
-# _basisdatum only meaningful in Tag view; drop in other views
+drop_cols = ["_sort", "eff_norm", "_budget_for_ist"] + [
+    c for c in ["wochentag", "tagestyp", "feiertag_name", "ferien_art"]
+    if c in agg.columns and zeit_ebene == "Tag"
+]
 if zeit_ebene != "Tag" and "_basisdatum" in agg.columns:
     drop_cols.append("_basisdatum")
 disp = agg.drop(columns=[c for c in drop_cols if c in agg.columns]).rename(columns=rename)
@@ -240,8 +253,9 @@ if zeit_ebene == "Tag":
     lead = [c for c in ["Filiale", "Bundesland", "Datum", "Basisdatum", "Wochentag", "Tagesinfo"] if c in disp.columns]
 else:
     lead = [c for c in ["Filiale", "Bundesland", "Zeit"] if c in disp.columns]
+# Δ € and Δ % removed (after = Budget); Abw. IST only up to last imported day
 ordered = lead + ["IST Basis", "+ Öffnung", "+ Verteilung", "+ Wochentag", "+ Preis",
-                  "+ Ferien", "+ Feiertag", "= Budget", "Δ €", "Δ %",
+                  "+ Ferien", "+ Feiertag", "= Budget",
                   "IST aktuell", "Abw. IST €", "Abw. IST %"]
 disp = disp[[c for c in ordered if c in disp.columns]]
 
@@ -268,14 +282,13 @@ m4.metric("Δ %", f"{(tot_bud - tot_vj) / tot_vj * 100:+.1f} %" if tot_vj else "
 
 st.caption(
     "Lesart: **IST Basis** = Umsatz des korrespondierenden Basistags. "
-    "Jede `+`-Spalte zeigt den additiven Effekt in €. Summe ergibt **= Budget**. "
-    "**Zeile anklicken** für Tagesdetails und Effekterklärung."
+    "Jede `+`-Spalte zeigt den additiven Effekt in €. Summe ergibt **= Budget**."
 )
 st.divider()
 
 # ── Tabelle ─────────────────────────────────────────────────────────────────
 num_cols = ["IST Basis", "+ Öffnung", "+ Verteilung", "+ Wochentag", "+ Preis",
-            "+ Ferien", "+ Feiertag", "= Budget", "Δ €", "IST aktuell", "Abw. IST €"]
+            "+ Ferien", "+ Feiertag", "= Budget", "IST aktuell", "Abw. IST €"]
 
 def _fmt_de(val):
     try:
@@ -303,8 +316,6 @@ disp_fmt = disp.copy()
 for c in num_cols:
     if c in disp_fmt.columns:
         disp_fmt[c] = disp_fmt[c].apply(_fmt_de)
-if "Δ %" in disp_fmt.columns:
-    disp_fmt["Δ %"] = disp_fmt["Δ %"].apply(_fmt_pct)
 if "Abw. IST %" in disp_fmt.columns:
     disp_fmt["Abw. IST %"] = disp_fmt["Abw. IST %"].apply(_fmt_pct)
 
@@ -331,10 +342,6 @@ col_cfg = {
              "Sondertag (z.B. Muttertag) = positiver Wert"),
     "= Budget":    st.column_config.TextColumn("= Budget",
         help="Tagesbudget = IST Basis + alle Effekte"),
-    "Δ €":         st.column_config.TextColumn("Δ €",
-        help="Budget minus IST Basis (absolute Veränderung gegenüber Vorjahresbasis)"),
-    "Δ %":         st.column_config.TextColumn("Δ %",
-        help="Relative Veränderung: Δ € / IST Basis × 100"),
     "IST aktuell": st.column_config.TextColumn("IST aktuell",
         help="Tatsächlich erreichter IST-Umsatz im Budgetjahr (soweit importiert)"),
     "Abw. IST €":  st.column_config.TextColumn("Abw. IST €",
@@ -343,134 +350,13 @@ col_cfg = {
         help="Abweichung IST vs. Budget in Prozent"),
 }
 
-selection = st.dataframe(
+st.dataframe(
     disp_fmt,
     use_container_width=True,
     hide_index=True,
     height=560,
-    on_select="rerun",
-    selection_mode="single-row",
     column_config={k: v for k, v in col_cfg.items() if k in disp_fmt.columns},
 )
-
-# ── Detail-Panel bei Zeilenauswahl ─────────────────────────────────────────
-_EFFECT_INFO = [
-    ("ist_vj",        "IST Basis",
-     "Tagesumsatz des korrespondierenden Basistags im Basiszeitraum.",
-     "Montag, 06.01.2025 war der Referenztag für Montag, 05.01.2026 → IST Basis = 5.234 €"),
-    ("eff_oeffnung",  "+ Öffnung",
-     "Korrektur für neu hinzugekommene oder weggefallene Öffnungstage.",
-     "Filiale öffnet ab 2026 samstags (vorher geschlossen) → +432 €. "
-     "Oder: war im Vorjahr an Neujahr geöffnet, heute nicht → −2.500 €"),
-    ("eff_verteilung","+ Verteilung",
-     "Glättung: der konkrete Basistag wird auf den Wochentags-Ø des Monats normiert.",
-     "Basistag (Mo, 06.01.2025) hatte 6.000 €, aber Ø aller Montage Jan 25 = 5.500 € → Verteilung = −500 €"),
-    ("eff_wochentag", "+ Wochentag",
-     "Wochentagsmix-Effekt: Planjahr hat andere Anzahl bestimmter Wochentage als Basisjahr.",
-     "Jan 2026 hat 5 Montage, Jan 2025 hatte 4 → ein Montag-Anteil mehr → +200 €"),
-    ("eff_preis",     "+ Preis",
-     "Preis-/Wachstumsfaktor aus den Preisanpassungsparametern (% je Monat).",
-     "3 % Preiserhöhung im Jan → Basisbetrag × 3 % / offene Tage ≈ +53 € je Tag"),
-    ("eff_ferien",    "+ Ferien",
-     "Ferienfaktor: Verhältnis Ø Ferienwochenumsatz zu Ø Pufferwochenumsatz (wochentags-gematcht).",
-     "Osterferien: Filiale machte im VJ 20 % mehr → eff_ferien > 0. "
-     "Schulfiliale in Ferien: 60 % weniger → eff_ferien < 0"),
-    ("eff_feiertag",  "+ Feiertag",
-     "Feiertags- oder Sondertag-Effekt (Differenz zum normalen Tagswert).",
-     "Christi Himmelfahrt, Filiale geschlossen → eff_feiertag = −Budget des Tages. "
-     "Muttertag mit Mehrumsatz → eff_feiertag > 0"),
-    ("budget",        "= Budget",
-     "Tagesbudget = IST Basis + Summe aller Effekte.",
-     "5.234 + 0 − 500 + 200 + 53 + 0 + 0 = 4.987 €"),
-]
-
-sel_rows = []
-try:
-    sel_rows = selection.selection.rows if hasattr(selection, "selection") else []
-except Exception:
-    pass
-
-if sel_rows:
-    row_idx = sel_rows[0]
-    if row_idx < len(agg):
-        agg_row = agg.iloc[row_idx]
-
-        detail_mask = df_all["Zeit"] == agg_row["Zeit"]
-        if entity_ebene == "Filiale" and "fil_nr" in agg_row.index:
-            detail_mask &= df_all["fil_nr"] == agg_row["fil_nr"]
-        elif entity_ebene == "Bundesland" and "bundesland" in agg_row.index:
-            detail_mask &= df_all["bundesland"] == agg_row["bundesland"]
-
-        detail_df = df_all[detail_mask].sort_values("datum").reset_index(drop=True)
-
-        ctx_parts = []
-        if entity_ebene == "Filiale" and "fil_nr" in agg_row.index:
-            ctx_parts.append(f"Filiale **{agg_row['fil_nr']}**")
-        elif entity_ebene == "Bundesland" and "bundesland" in agg_row.index:
-            ctx_parts.append(f"Bundesland **{agg_row['bundesland']}**")
-        ctx_parts.append(f"**{agg_row['Zeit']}**")
-
-        with st.container(border=True):
-            st.subheader("🔍 " + " — ".join(ctx_parts))
-
-            summary_rows = []
-            for col, label, explanation, beispiel in _EFFECT_INFO:
-                if col in agg_row.index:
-                    val = agg_row[col]
-                    summary_rows.append({
-                        "Effekt": label,
-                        "Summe €": _fmt_de(val) if not pd.isna(val) else "",
-                        "Erklärung": explanation,
-                        "Beispiel": beispiel,
-                    })
-
-            summary_df = pd.DataFrame(summary_rows)
-            st.dataframe(
-                summary_df,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Effekt":     st.column_config.TextColumn(width=110),
-                    "Summe €":    st.column_config.TextColumn(width=110),
-                    "Erklärung":  st.column_config.TextColumn(width=280),
-                    "Beispiel":   st.column_config.TextColumn(width=380),
-                },
-            )
-
-            if not detail_df.empty and zeit_ebene != "Tag":
-                with st.expander(f"📅 Tagesdetails ({len(detail_df)} Tage)"):
-                    day_cols = ["datum", "wochentag", "tagestyp", "feiertag_name", "ferien_art",
-                                "ist_vj", "eff_oeffnung", "eff_verteilung", "eff_wochentag",
-                                "eff_preis", "eff_ferien", "eff_feiertag", "budget"]
-                    day_cols = [c for c in day_cols if c in detail_df.columns]
-                    day_show = detail_df[day_cols].copy()
-                    day_show["Datum"] = day_show["datum"].dt.strftime("%d.%m.%Y")
-                    if "wochentag" in day_show.columns:
-                        day_show["Wochentag"] = day_show["wochentag"].apply(
-                            lambda w: WT_MAP[int(w)] if pd.notna(w) else "")
-                    day_show["Tagesinfo"] = day_show.apply(
-                        lambda r: _build_tagesinfo(
-                            r.get("tagestyp", ""), r.get("feiertag_name", ""), r.get("ferien_art", "")),
-                        axis=1)
-                    for c in ["ist_vj", "eff_oeffnung", "eff_verteilung", "eff_wochentag",
-                               "eff_preis", "eff_ferien", "eff_feiertag", "budget"]:
-                        if c in day_show.columns:
-                            day_show[c] = day_show[c].apply(_fmt_de)
-                    day_show = day_show.drop(columns=[c for c in
-                        ["datum", "wochentag", "tagestyp", "feiertag_name", "ferien_art"]
-                        if c in day_show.columns])
-                    day_show = day_show.rename(columns={
-                        "ist_vj": "IST Basis", "eff_oeffnung": "+ Öffnung",
-                        "eff_verteilung": "+ Verteilung", "eff_wochentag": "+ Wochentag",
-                        "eff_preis": "+ Preis", "eff_ferien": "+ Ferien",
-                        "eff_feiertag": "+ Feiertag", "budget": "= Budget",
-                    }).fillna("")
-                    show_order = ["Datum", "Wochentag", "Tagesinfo"] + [
-                        c for c in ["IST Basis", "+ Öffnung", "+ Verteilung", "+ Wochentag",
-                                    "+ Preis", "+ Ferien", "+ Feiertag", "= Budget"]
-                        if c in day_show.columns]
-                    day_show = day_show[[c for c in show_order if c in day_show.columns]]
-                    st.dataframe(day_show, use_container_width=True, hide_index=True)
 
 # ── Excel-Export ────────────────────────────────────────────────────────────
 st.divider()
@@ -505,8 +391,6 @@ with st.expander("📖 Legende — Spaltenbezeichnungen und Berechnungslogik", e
 | **+ Ferien** | Ferienfaktor: Verhältnis Ø Ferienwochenumsatz zu Ø Pufferwochenumsatz | Osterferien: +20 % → +1.100 €; Schulfiliale in Ferien: −40 % → −800 € |
 | **+ Feiertag** | Feiertags-/Sondertag-Effekt (Abweichung vom normalen Tagswert) | Christi Himmelfahrt geschlossen → −5.000 €; Muttertag Mehrumsatz → +600 € |
 | **= Budget** | Tagesbudget = IST Basis + Summe aller Effekte | 5.234 − 500 + 200 + 53 + 0 + 0 = **4.987 €** |
-| **Δ €** | Budget − IST Basis (absolute Veränderung gegenüber Basisjahr) | 4.987 − 5.234 = −247 € |
-| **Δ %** | Δ € / IST Basis × 100 | −247 / 5.234 × 100 = −4,7 % |
 
 ### Berechnungsformel (additiv je Tag)
 

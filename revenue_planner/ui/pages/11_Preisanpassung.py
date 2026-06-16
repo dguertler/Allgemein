@@ -4,14 +4,14 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from ui.session import get_conn, get_gmbh, require_db
+from ui.session import get_conn, get_gmbh, require_db, get_budgetjahr
 import pandas as pd
-from datetime import date
 
 require_db()
 conn = get_conn()
+planjahr = get_budgetjahr()
 st.title("Preisanpassung je Monat (%)")
-st.caption(f"Firma: **{get_gmbh()}**")
+st.caption(f"Firma: **{get_gmbh()}** · Budgetjahr: **{planjahr}**")
 
 st.markdown("""
 Trage hier die geplante **Preisanpassung je Monat** in % ein
@@ -19,9 +19,6 @@ Trage hier die geplante **Preisanpassung je Monat** in % ein
 Diese Werte werden als Wachstumsfaktor in der Planung berücksichtigt.  
 0 % = kein Preiseffekt in diesem Monat.
 """)
-
-planjahr = st.number_input("Planjahr", min_value=2024, max_value=2035,
-                            value=date.today().year + 1, step=1)
 
 monat_rows = conn.execute(
     "SELECT monat, wachstum_pct FROM parameter_monat WHERE planjahr=?", (planjahr,)

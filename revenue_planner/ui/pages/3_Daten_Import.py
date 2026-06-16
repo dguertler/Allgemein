@@ -52,7 +52,7 @@ if st.button("⬆️ Importieren", type="primary", disabled=uploaded is None):
 if st.session_state.get("_confirm_import"):
     st.warning(
         f"⚠️ Es sind bereits **{existing_count:,}** Datensätze vorhanden. "
-        "Ein Neuimport ersetzt alle bestehenden Daten für die enthaltenen Filialen und Daten. "
+        "Ein Neuimport **löscht alle bisherigen Daten** und importiert die neue Datei vollständig. "
         "Wirklich importieren?"
     )
     c1, c2, _ = st.columns([1.5, 1, 5])

@@ -601,7 +601,8 @@ class PlanningEngine:
             ref = self._feiertag_base_date(ft, month)
             vj_val = self._ist_on(fil_nr, ref)
             raw = round(vj_val * growth, 2)
-            eff_feiertag = raw - tag_plan
+            eff_feiertag = 0.0
+            direct_ferien = True  # reuse direct-comparison flag
         elif m["tagestyp"] == "sondertag":
             st = m["st"]
             if st["methode"] == "samstag":

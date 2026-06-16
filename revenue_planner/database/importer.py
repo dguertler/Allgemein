@@ -100,8 +100,9 @@ def import_ist_umsatz(
             for r in df[["fil_nr", "datum", "umsatz"]].itertuples()]
 
     cur = conn.cursor()
+    cur.execute("DELETE FROM ist_umsatz")
     cur.executemany(
-        "INSERT OR REPLACE INTO ist_umsatz (fil_nr, datum, umsatz) VALUES (:fil_nr, :datum, :umsatz)",
+        "INSERT INTO ist_umsatz (fil_nr, datum, umsatz) VALUES (:fil_nr, :datum, :umsatz)",
         rows,
     )
     conn.commit()

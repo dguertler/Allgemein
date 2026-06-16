@@ -53,9 +53,18 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
     bl_rows = conn.execute(
         "SELECT DISTINCT bundesland FROM filialen WHERE bundesland IS NOT NULL AND bundesland != ''"
     ).fetchall()
-    # Normalize to 2-letter abbreviations; deduplicate
     bl_raw = [r["bundesland"] for r in bl_rows]
     bundeslaender = list(dict.fromkeys(_normalize_bl(b) for b in bl_raw)) if bl_raw else ["RP"]
+
+    # Build VJ ferien dates per BL to avoid comparing normal plan days with VJ vacation days
+    _vj_ferien_bl: dict[str, set[str]] = {}
+    for f in engine.ferien_plan:
+        bl_f = f["bundesland"]
+        vs = date.fromisoformat(f["start_vj"])
+        ve = date.fromisoformat(f["ende_vj"])
+        s = _vj_ferien_bl.setdefault(bl_f, set())
+        for d in _date_range(vs, ve):
+            s.add(d.isoformat())
 
     rows: list[tuple] = []
 
@@ -70,7 +79,6 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
             iso_week = plan_d.isocalendar()[1]
 
             for bl in bundeslaender:
-                # bl is already normalized (2-letter abbreviation)
                 bezeichnung_parts: list[str] = []
                 base_bezeichnung_parts: list[str] = []
                 plan_typ = "normal"
@@ -88,7 +96,7 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                     if base_d is None:
                         base_d = _safe_date(by, month, day) or plan_d
 
-                # 2. Feiertagstag (art='feiertagstag') — nur wenn kein echter Feiertag
+                # 2. Feiertagstag (art='feiertagstag') — only when no actual Feiertag
                 if plan_typ == "normal":
                     ft_tag = None
                     for entry in engine.feiertage.get(iso, []):
@@ -99,7 +107,12 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                         plan_typ = "feiertagstag"
                         bezeichnung_parts.append("Feiertagstag")
                         base_bezeichnung_parts.append("Feiertagstag")
-                        # Feiertagstage werden wie normale Tage behandelt → ISO-KW Basis
+                        # Use stored datum_vj (parent holiday VJ + offset) as base date
+                        if ft_tag.get("datum_vj"):
+                            try:
+                                base_d = date.fromisoformat(ft_tag["datum_vj"])
+                            except (ValueError, TypeError):
+                                pass
 
                 # 3. Sondertag
                 st_entry = engine._relevant_sondertag(iso, bl)
@@ -115,12 +128,10 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                             except ValueError:
                                 pass
 
-                # 4. Ferien — immer zur Beschreibung hinzufügen (auch wenn schon anderer Typ)
+                # 4. Ferien — update plan_typ/base_d but NOT bezeichnung (shown in separate columns)
                 fer = engine._ferien_info_for_day(iso, bl)
                 if fer:
                     art, woche = fer
-                    bezeichnung_parts.append(art)
-                    base_bezeichnung_parts.append(art)
                     if plan_typ == "normal":
                         plan_typ = "ferien"
                         mapping_art = "ferien"
@@ -140,6 +151,31 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                 # 5. Fallback: ISO-KW
                 if base_d is None:
                     base_d = _date_from_iso_week(by, iso_week, wt)
+
+                # 6. For normal/feiertagstag days: avoid landing on a VJ holiday or vacation
+                if plan_typ in ("normal", "feiertagstag") and base_d is not None:
+                    base_iso = base_d.isoformat()
+                    _is_vj_holiday = any(
+                        fe.get("art") == "feiertag" and fe["bundesland"] in ("alle", bl)
+                        for fe in engine.feiertage.get(base_iso, [])
+                    )
+                    _is_vj_ferien = base_iso in _vj_ferien_bl.get(bl, set())
+                    if _is_vj_holiday or _is_vj_ferien:
+                        for shift in range(1, 9):
+                            for direction in (-1, 1):
+                                alt = base_d + timedelta(weeks=shift * direction)
+                                alt_iso = alt.isoformat()
+                                alt_holiday = any(
+                                    fe.get("art") == "feiertag" and fe["bundesland"] in ("alle", bl)
+                                    for fe in engine.feiertage.get(alt_iso, [])
+                                )
+                                alt_ferien = alt_iso in _vj_ferien_bl.get(bl, set())
+                                if not alt_holiday and not alt_ferien:
+                                    base_d = alt
+                                    break
+                            else:
+                                continue
+                            break
 
                 bezeichnung = ", ".join(bezeichnung_parts)
                 base_bezeichnung = ", ".join(base_bezeichnung_parts)
