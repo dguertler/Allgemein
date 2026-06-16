@@ -154,7 +154,7 @@ elif entity_ebene == "Bundesland":
 
 extra_agg = {}
 if zeit_ebene == "Tag":
-    for c in ["wochentag", "tagestyp", "feiertag_name", "ferien_art"]:
+    for c in ["wochentag", "tagestyp", "feiertag_name", "ferien_art", "bundesland"]:
         if c in df_all.columns:
             extra_agg[c] = "first"
 
@@ -178,20 +178,19 @@ agg = agg.reset_index(drop=True)
 
 WT_MAP = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
-def _build_tagesinfo(tagestyp, feiertag_name, ferien_art):
+def _build_tagesinfo(tagestyp, feiertag_name):
     parts = []
     typ = tagestyp or ""
     name = feiertag_name or ""
-    ferien = ferien_art or ""
     if typ in ("feiertag", "sondertag") and name:
         parts.append(name)
+    elif typ == "feiertagstag":
+        parts.append(name or "Feiertagstag")
     elif typ == "geschlossen":
         if name:
             parts.append(f"Geschlossen ({name})")
         else:
             parts.append("Geschlossen")
-    if ferien:
-        parts.append(ferien)
     return " | ".join(parts) if parts else ""
 
 if zeit_ebene == "Tag":
@@ -204,6 +203,8 @@ if zeit_ebene == "Tag":
         except Exception:
             return ""
         bl = str(row.get("bundesland", "") or "")
+        if not bl:
+            return ""
         bd = _dm_lookup.get((iso, bl)) or _dm_lookup.get((iso, "alle")) or ""
         if not bd:
             return ""
@@ -213,18 +214,17 @@ if zeit_ebene == "Tag":
             return bd
     agg["_basisdatum"] = agg.apply(_lookup_basisdatum, axis=1)
     agg["_tagesinfo"] = agg.apply(
-        lambda r: _build_tagesinfo(
-            r.get("tagestyp", ""), r.get("feiertag_name", ""), r.get("ferien_art", "")),
+        lambda r: _build_tagesinfo(r.get("tagestyp", ""), r.get("feiertag_name", "")),
         axis=1)
 
 # IST aktuell vs. Budget — nur bis zum letzten importierten Tag
-agg["Abw. IST €"] = agg.apply(
+agg["Abw. €"] = agg.apply(
     lambda x: round(float(x["ist_aktuell"]) - float(x["_budget_for_ist"]), 2)
     if not pd.isna(x["ist_aktuell"]) and not pd.isna(x.get("_budget_for_ist")) else None, axis=1
 )
-agg["Abw. IST %"] = agg.apply(
-    lambda x: round(float(x["Abw. IST €"]) / float(x["_budget_for_ist"]) * 100, 1)
-    if not pd.isna(x.get("Abw. IST €")) and float(x.get("_budget_for_ist", 0) or 0) != 0 else None,
+agg["Abw. %"] = agg.apply(
+    lambda x: round(float(x["Abw. €"]) / float(x["_budget_for_ist"]) * 100, 0)
+    if not pd.isna(x.get("Abw. €")) and float(x.get("_budget_for_ist", 0) or 0) != 0 else None,
     axis=1
 )
 
@@ -233,30 +233,33 @@ rename = {
     "ist_vj": "IST Basis", "eff_oeffnung": "+ Öffnung", "eff_verteilung": "+ Verteilung",
     "eff_wochentag": "+ Wochentag", "eff_preis": "+ Preis", "eff_ferien": "+ Ferien",
     "eff_feiertag": "+ Feiertag", "budget": "= Budget",
-    "ist_aktuell": "IST aktuell",
+    "ist_aktuell": "= IST",
 }
 if zeit_ebene == "Tag":
     rename["Zeit"] = "Datum"
-    rename["_wt_str"] = "Wochentag"
+    rename["_wt_str"] = "Wt."
     rename["_basisdatum"] = "Basisdatum"
     rename["_tagesinfo"] = "Tagesinfo"
+    rename["ferien_art"] = "Ferien"
 
 drop_cols = ["_sort", "eff_norm", "_budget_for_ist"] + [
-    c for c in ["wochentag", "tagestyp", "feiertag_name", "ferien_art"]
+    c for c in ["wochentag", "tagestyp", "feiertag_name"]
     if c in agg.columns and zeit_ebene == "Tag"
 ]
+# ferien_art kept for Tag level (shown as "Ferien" column); drop for other levels
+if zeit_ebene != "Tag":
+    drop_cols += [c for c in ["ferien_art"] if c in agg.columns]
 if zeit_ebene != "Tag" and "_basisdatum" in agg.columns:
     drop_cols.append("_basisdatum")
 disp = agg.drop(columns=[c for c in drop_cols if c in agg.columns]).rename(columns=rename)
 
 if zeit_ebene == "Tag":
-    lead = [c for c in ["Filiale", "Bundesland", "Datum", "Basisdatum", "Wochentag", "Tagesinfo"] if c in disp.columns]
+    lead = [c for c in ["Filiale", "Bundesland", "Datum", "Basisdatum", "Wt.", "Tagesinfo", "Ferien"] if c in disp.columns]
 else:
     lead = [c for c in ["Filiale", "Bundesland", "Zeit"] if c in disp.columns]
-# Δ € and Δ % removed (after = Budget); Abw. IST only up to last imported day
 ordered = lead + ["IST Basis", "+ Öffnung", "+ Verteilung", "+ Wochentag", "+ Preis",
                   "+ Ferien", "+ Feiertag", "= Budget",
-                  "IST aktuell", "Abw. IST €", "Abw. IST %"]
+                  "= IST", "Abw. €", "Abw. %"]
 disp = disp[[c for c in ordered if c in disp.columns]]
 
 # ── Kennzahlen ─────────────────────────────────────────────────────────────
@@ -288,7 +291,7 @@ st.divider()
 
 # ── Tabelle ─────────────────────────────────────────────────────────────────
 num_cols = ["IST Basis", "+ Öffnung", "+ Verteilung", "+ Wochentag", "+ Preis",
-            "+ Ferien", "+ Feiertag", "= Budget", "IST aktuell", "Abw. IST €"]
+            "+ Ferien", "+ Feiertag", "= Budget", "= IST", "Abw. €"]
 
 def _fmt_de(val):
     try:
@@ -308,7 +311,7 @@ def _fmt_pct(val):
     except (TypeError, ValueError):
         pass
     try:
-        return f"{float(val):+.1f} %"
+        return f"{float(val):+.0f} %"
     except (TypeError, ValueError):
         return ""
 
@@ -316,8 +319,8 @@ disp_fmt = disp.copy()
 for c in num_cols:
     if c in disp_fmt.columns:
         disp_fmt[c] = disp_fmt[c].apply(_fmt_de)
-if "Abw. IST %" in disp_fmt.columns:
-    disp_fmt["Abw. IST %"] = disp_fmt["Abw. IST %"].apply(_fmt_pct)
+if "Abw. %" in disp_fmt.columns:
+    disp_fmt["Abw. %"] = disp_fmt["Abw. %"].apply(_fmt_pct)
 
 col_cfg = {
     "Basisdatum":   st.column_config.TextColumn("Basisdatum",
@@ -342,12 +345,14 @@ col_cfg = {
              "Sondertag (z.B. Muttertag) = positiver Wert"),
     "= Budget":    st.column_config.TextColumn("= Budget",
         help="Tagesbudget = IST Basis + alle Effekte"),
-    "IST aktuell": st.column_config.TextColumn("IST aktuell",
+    "= IST":       st.column_config.TextColumn("= IST",
         help="Tatsächlich erreichter IST-Umsatz im Budgetjahr (soweit importiert)"),
-    "Abw. IST €":  st.column_config.TextColumn("Abw. IST €",
-        help="IST aktuell − Budget (positiv = über Budget, negativ = unter Budget)"),
-    "Abw. IST %":  st.column_config.TextColumn("Abw. IST %",
-        help="Abweichung IST vs. Budget in Prozent"),
+    "Abw. €":      st.column_config.TextColumn("Abw. €",
+        help="IST − Budget (positiv = über Budget, negativ = unter Budget)"),
+    "Abw. %":      st.column_config.TextColumn("Abw. %",
+        help="Abweichung IST vs. Budget in Prozent (ohne Nachkommastellen)"),
+    "Ferien":      st.column_config.TextColumn("Ferien",
+        help="Ferienname wenn der Tag in einer Schulferienperiode liegt"),
 }
 
 st.dataframe(

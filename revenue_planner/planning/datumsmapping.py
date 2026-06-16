@@ -145,12 +145,20 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                             vj_ende = date.fromisoformat(period["ende_vj"])
                             wk_start = vj_start + timedelta(weeks=woche - 1)
                             delta = wt - wk_start.weekday()
-                            base_d = wk_start + timedelta(days=delta)
-                            base_d = max(vj_start, min(base_d, vj_ende))
+                            base_d_candidate = wk_start + timedelta(days=delta)
+                            # Only use candidate if it falls within the VJ ferien period.
+                            # If outside (clamping would occur), fall through to ISO-KW fallback
+                            # to avoid mapping multiple plan weekdays to the same base date.
+                            if vj_start <= base_d_candidate <= vj_ende:
+                                base_d = base_d_candidate
 
                 # 5. Fallback: ISO-KW
                 if base_d is None:
                     base_d = _date_from_iso_week(by, iso_week, wt)
+
+                # 6. Override: Dec 24 and Dec 31 always compare to same calendar date in base year
+                if month == 12 and day in (24, 31):
+                    base_d = _safe_date(by, 12, day) or base_d
 
                 # 6. For normal/feiertagstag days: avoid landing on a VJ holiday or vacation
                 if plan_typ in ("normal", "feiertagstag") and base_d is not None:

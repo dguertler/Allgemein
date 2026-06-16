@@ -51,13 +51,16 @@ st.dataframe(
     use_container_width=True,
 )
 
-if st.button("\U0001f4be Preisanpassungen speichern", type="primary"):
+_initial_df = pd.DataFrame([initial])
+_edited_vals = [float(edited[m].iloc[0]) for m in MONATE]
+_initial_vals = [float(_initial_df[m].iloc[0]) for m in MONATE]
+if _edited_vals != _initial_vals:
     for i, m in enumerate(MONATE):
         conn.execute("""
             INSERT INTO parameter_monat (planjahr, monat, wachstum_pct)
             VALUES (?,?,?)
             ON CONFLICT(planjahr, monat) DO UPDATE SET wachstum_pct=excluded.wachstum_pct
-        """, (planjahr, i + 1, float(edited[m].iloc[0])))
+        """, (planjahr, i + 1, _edited_vals[i]))
     conn.commit()
-    st.success("✅ Gespeichert.")
+    st.toast("✅ Preisanpassungen gespeichert.")
     st.rerun()

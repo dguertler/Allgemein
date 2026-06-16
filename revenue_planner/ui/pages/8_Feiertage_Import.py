@@ -472,7 +472,7 @@ with tab_ft:
         column_config={
             "bundesland": st.column_config.SelectboxColumn("Bundesland",
                                                            options=["Alle"] + AKTIVE_BL_NAMES,
-                                                           width="medium"),
+                                                           width="small"),
             "datum_plan": st.column_config.DateColumn("Datum Budget", format="DD.MM.YYYY",
                                                        width="small"),
             "wt_plan":    st.column_config.TextColumn("Wt.", disabled=True, width="small"),
@@ -535,7 +535,7 @@ with tab_st:
         column_config={
             "bundesland":      st.column_config.SelectboxColumn("Bundesland",
                                                                 options=["Alle"] + AKTIVE_BL_NAMES,
-                                                                width="medium"),
+                                                                width="small"),
             "datum_plan":      st.column_config.DateColumn("Datum Budget", format="DD.MM.YYYY",
                                                            width="small"),
             "wt_plan":         st.column_config.TextColumn("Wt.", disabled=True, width="small"),
@@ -653,7 +653,7 @@ with tab_fer:
         column_config={
             "bundesland":     st.column_config.SelectboxColumn("Bundesland",
                                                                options=["Alle"] + AKTIVE_BL_NAMES,
-                                                               width="medium"),
+                                                               width="small"),
             "art":            st.column_config.TextColumn("Beschreibung"),
             "start":          st.column_config.DateColumn("Start", format="DD.MM.YYYY",
                                                           width="small"),
