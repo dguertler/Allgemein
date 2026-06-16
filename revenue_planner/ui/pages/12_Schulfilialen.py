@@ -105,6 +105,16 @@ existing_sf = {
     ).fetchall()
 }
 
+# Nur Filialen mit mind. einem erkannten Schulferien-Eintrag anzeigen
+recognized_fils = {fil_nr for (fil_nr, _, _) in existing_sf.keys()}
+if not recognized_fils:
+    st.info(
+        "Noch keine Schulfilialen erkannt. Bitte erst 'Aus IST-Daten erkennen' ausführen."
+    )
+    st.stop()
+filialen = [f for f in filialen if f["fil_nr"] in recognized_fils]
+
+# Build columns: one per (ferien_art, bundesland) pair
 vacation_cols = [(row["art"], row["bundesland"]) for _, row in ferien_kalender.iterrows()]
 col_labels = [f"{art} ({bl})" for art, bl in vacation_cols]
 

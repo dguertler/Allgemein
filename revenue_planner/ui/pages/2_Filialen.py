@@ -8,6 +8,27 @@ from ui.session import get_conn, get_gmbh, require_db
 import pandas as pd
 from datetime import date
 
+BL_NAME_TO_ABBR = {
+    "Brandenburg": "BB", "Berlin": "BE", "Baden-Württemberg": "BW",
+    "Bayern": "BY", "Bremen": "HB", "Hessen": "HE", "Hamburg": "HH",
+    "Mecklenburg-Vorpommern": "MV", "Niedersachsen": "NI", "Nordrhein-Westfalen": "NW",
+    "Rheinland-Pfalz": "RP", "Schleswig-Holstein": "SH", "Saarland": "SL",
+    "Sachsen": "SN", "Sachsen-Anhalt": "ST", "Thüringen": "TH",
+}
+
+
+def _normalize_bl_import(val: str) -> str:
+    """Accept both '2-letter', 'DE-XX' and long name; always return 2-letter abbreviation."""
+    v = str(val or "").strip()
+    v_up = v.upper().replace("DE-", "")
+    if v_up in {b.upper() for b in ["BB","BE","BW","BY","HB","HE","HH","MV","NI","NW","RP","SH","SL","SN","ST","TH"]}:
+        return v_up
+    # Try long-name lookup (case-insensitive)
+    for full, abbr in BL_NAME_TO_ABBR.items():
+        if full.lower() == v.lower():
+            return abbr
+    return v_up  # return as-is (will fail validation later)
+
 require_db()
 conn = get_conn()
 st.title("Filialverwaltung")
@@ -279,8 +300,8 @@ with tab2:
 
                 preview = pd.DataFrame()
                 preview["Filialnummer"] = imp[map_fil_nr].str.strip()
-                preview["Bundesland"] = (
-                    imp[map_bundesland].str.strip().str.upper().str.replace("DE-", "", regex=False)
+                preview["Bundesland"] = imp[map_bundesland].apply(
+                    lambda x: _normalize_bl_import(str(x))
                 )
                 if map_bezeichnung != NONE_OPTION:
                     preview["Bezeichnung"] = imp[map_bezeichnung]
@@ -302,7 +323,7 @@ with tab2:
 
                     for idx, row in preview.iterrows():
                         fn = str(row.get("Filialnummer", "")).strip()
-                        bl = str(row.get("Bundesland", "")).strip().upper().replace("DE-", "")
+                        bl = _normalize_bl_import(str(row.get("Bundesland", "")))
 
                         if _is_empty(fn):
                             skipped.append({"Zeile": idx + 2, "Grund": "Filialnummer fehlt",

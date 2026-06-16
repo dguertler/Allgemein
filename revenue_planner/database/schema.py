@@ -172,6 +172,19 @@ CREATE TABLE IF NOT EXISTS ferien_faktor (
     PRIMARY KEY (fil_nr, bundesland, ferien_art, woche)
 );
 
+-- ── Date mapping (computed, cache per plan year × bundesland) ────────────────
+CREATE TABLE IF NOT EXISTS datumsmapping (
+    plan_datum  TEXT NOT NULL,
+    base_datum  TEXT NOT NULL,
+    plan_typ    TEXT NOT NULL DEFAULT 'normal',
+    base_typ    TEXT,
+    bundesland  TEXT NOT NULL DEFAULT 'alle',
+    mapping_art      TEXT NOT NULL DEFAULT 'iso_kw',
+    bezeichnung      TEXT NOT NULL DEFAULT '',
+    base_bezeichnung TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (plan_datum, bundesland)
+);
+
 -- ── Computed plan (written after each planning run) ───────────────────────
 -- Additive Effekt-Zerlegung: ist_vj + Summe(eff_*) = budget (exakt je Tag)
 CREATE TABLE IF NOT EXISTS planung (
@@ -301,6 +314,24 @@ def _migrate(conn: sqlite3.Connection):
             PRIMARY KEY (fil_nr, ferien_art, bundesland)
         )
     """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS datumsmapping (
+            plan_datum  TEXT NOT NULL,
+            base_datum  TEXT NOT NULL,
+            plan_typ    TEXT NOT NULL DEFAULT 'normal',
+            base_typ    TEXT,
+            bundesland  TEXT NOT NULL DEFAULT 'alle',
+            mapping_art TEXT NOT NULL DEFAULT 'iso_kw',
+            bezeichnung TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (plan_datum, bundesland)
+        )
+    """)
+    dm_cols = {row[1] for row in conn.execute("PRAGMA table_info(datumsmapping)").fetchall()}
+    if "bezeichnung" not in dm_cols:
+        conn.execute("ALTER TABLE datumsmapping ADD COLUMN bezeichnung TEXT NOT NULL DEFAULT ''")
+    if "base_bezeichnung" not in dm_cols:
+        conn.execute("ALTER TABLE datumsmapping ADD COLUMN base_bezeichnung TEXT NOT NULL DEFAULT ''")
 
     plan_cols = {row[1] for row in conn.execute("PRAGMA table_info(planung)").fetchall()}
     for col in ["bundesland", "eff_oeffnung", "eff_verteilung", "eff_wochentag",

@@ -112,10 +112,15 @@ if entity_ebene == "Filiale":
 elif entity_ebene == "Bundesland":
     group_keys = ["bundesland"] + group_keys
 
+# Budget nur für Tage zählen, an denen IST-Umsatz bereits importiert ist —
+# sonst ist die Abweichung in angebrochenen Monaten/Wochen irreführend.
+df["_budget_ist"] = df["Budget"].where(df["IST aktuell"].notna())
+
 agg = (df.groupby([k for k in group_keys if k != "_sort"], as_index=False)
        .agg({
            "IST Basis":    "sum",
            "Budget":       "sum",
+           "_budget_ist":  lambda x: x.sum() if x.notna().any() else None,
            "IST aktuell":  lambda x: x.sum() if x.notna().any() else None,
            "_sort":        "min",
        })
@@ -123,20 +128,24 @@ agg = (df.groupby([k for k in group_keys if k != "_sort"], as_index=False)
                                   else [group_keys[0], "_sort"])]))
 
 agg["Abw. €"] = agg.apply(
-    lambda x: round(float(x["IST aktuell"]) - float(x["Budget"]), 2)
-    if not pd.isna(x["IST aktuell"]) else None,
+    lambda x: round(float(x["IST aktuell"]) - float(x["_budget_ist"]), 2)
+    if not pd.isna(x["IST aktuell"]) and not pd.isna(x["_budget_ist"]) else None,
     axis=1,
 )
 agg["Abw. %"] = agg.apply(
-    lambda x: round(float(x["Abw. €"]) / float(x["Budget"]) * 100, 1)
-    if not pd.isna(x["Abw. €"]) and float(x["Budget"]) != 0 else None,
+    lambda x: round(float(x["Abw. €"]) / float(x["_budget_ist"]) * 100, 1)
+    if not pd.isna(x["Abw. €"]) and not pd.isna(x["_budget_ist"])
+    and float(x["_budget_ist"]) != 0 else None,
     axis=1,
+)
+agg["Genauigkeit %"] = agg["Abw. %"].apply(
+    lambda x: round(100.0 - abs(float(x)), 1) if not pd.isna(x) else None
 )
 
 rename = {"fil_nr": "Filiale", "bundesland": "Bundesland"}
-disp = agg.drop(columns=["_sort"]).rename(columns=rename)
+disp = agg.drop(columns=["_sort", "_budget_ist"]).rename(columns=rename)
 lead = [c for c in ["Filiale", "Bundesland", "Zeit"] if c in disp.columns]
-ordered = lead + ["IST Basis", "Budget", "IST aktuell", "Abw. €", "Abw. %"]
+ordered = lead + ["IST Basis", "Budget", "IST aktuell", "Abw. €", "Abw. %", "Genauigkeit %"]
 disp = disp[[c for c in ordered if c in disp.columns]]
 
 # ── Kennzahlen ─────────────────────────────────────────────────────────────
@@ -147,19 +156,31 @@ def _de(val) -> str:
 
 tot_basis  = agg["IST Basis"].sum()
 tot_bud    = agg["Budget"].sum()
+tot_bud_ist = agg["_budget_ist"].sum() if agg["_budget_ist"].notna().any() else None
 tot_ist    = agg["IST aktuell"].sum() if has_ist and agg["IST aktuell"].notna().any() else None
+
+ist_bis = df.loc[df["IST aktuell"].notna(), "datum_dt"].max() if has_ist else None
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("IST Basis", f"{_de(tot_basis)} €")
 m2.metric("Budget", f"{_de(tot_bud)} €")
-if tot_ist is not None:
-    abw_e = tot_ist - tot_bud
-    abw_p = abw_e / tot_bud * 100 if tot_bud != 0 else 0.0
+if tot_ist is not None and tot_bud_ist is not None:
+    abw_e = tot_ist - tot_bud_ist
+    abw_p = abw_e / tot_bud_ist * 100 if tot_bud_ist != 0 else 0.0
     m3.metric("IST aktuell", f"{_de(tot_ist)} €")
-    m4.metric("Abw. IST/Budget", f"{'+' if abw_e >= 0 else ''}{_de(abw_e)} € ({abw_p:+.1f} %)")
+    m4.metric("Abw. IST/Budget", f"{'+' if abw_e >= 0 else ''}{_de(abw_e)} € ({abw_p:+.1f} %)",
+              help=f"Verglichen wird nur das Budget der Tage mit importiertem IST-Umsatz "
+                   f"(Budget bis dahin: {_de(tot_bud_ist)} €).")
 else:
     m3.metric("IST aktuell", "– (noch kein Import)")
     m4.metric("Abw. IST/Budget", "–")
+
+if ist_bis is not None:
+    st.caption(
+        f"IST-Umsätze importiert bis **{ist_bis.strftime('%d.%m.%Y')}**. "
+        "Abweichungen (€/%) vergleichen IST nur mit dem Budget bis zu diesem Datum — "
+        "angebrochene Wochen/Monate werden anteilig gerechnet."
+    )
 
 st.divider()
 
@@ -187,6 +208,7 @@ def _fmt_pct(val):
         return ""
 
 num_cols = ["IST Basis", "Budget", "IST aktuell", "Abw. €"]
+pct_col_genau = "Genauigkeit %"
 
 # Pre-format numeric columns directly (avoids Pandas Styler cell-limit issues)
 disp_fmt = disp.copy()
@@ -195,8 +217,93 @@ for c in num_cols:
         disp_fmt[c] = disp_fmt[c].apply(_fmt_de)
 if "Abw. %" in disp_fmt.columns:
     disp_fmt["Abw. %"] = disp_fmt["Abw. %"].apply(_fmt_pct)
+if pct_col_genau in disp_fmt.columns:
+    disp_fmt[pct_col_genau] = disp_fmt[pct_col_genau].apply(
+        lambda x: f"{float(x):.1f} %" if x != "" else ""
+    )
 
 st.dataframe(disp_fmt, use_container_width=True, hide_index=True, height=560)
+
+# ── Analyse: Größte Abweichungen ────────────────────────────────────────────
+if has_ist:
+    st.divider()
+    st.subheader("Größte Abweichungen")
+
+    # Tagesebene für detaillierte Analyse
+    df_day = df.copy()
+    df_day["_budget_ist_day"] = df_day["Budget"].where(df_day["IST aktuell"].notna())
+    df_day["abw_e_day"] = df_day.apply(
+        lambda x: round(float(x["IST aktuell"]) - float(x["_budget_ist_day"]), 2)
+        if not pd.isna(x["IST aktuell"]) and not pd.isna(x["_budget_ist_day"]) else None,
+        axis=1,
+    )
+    df_day["abw_pct_day"] = df_day.apply(
+        lambda x: round(float(x["abw_e_day"]) / float(x["_budget_ist_day"]) * 100, 1)
+        if not pd.isna(x.get("abw_e_day")) and float(x.get("_budget_ist_day") or 0) != 0 else None,
+        axis=1,
+    )
+    df_day_valid = df_day.dropna(subset=["abw_pct_day"]).copy()
+
+    if not df_day_valid.empty:
+        # Top 10 größte Abweichungen (absolut %)
+        top_days = (pd.concat([
+                        df_day_valid.nlargest(10, "abw_pct_day", keep="all"),
+                        df_day_valid.nsmallest(10, "abw_pct_day", keep="all"),
+                    ])
+                    .drop_duplicates()
+                    .sort_values("abw_pct_day", key=abs, ascending=False)
+                    .head(10))
+
+        show_cols = ["fil_nr", "datum_dt", "bundesland", "_budget_ist_day", "IST aktuell", "abw_e_day", "abw_pct_day"]
+        top_show = top_days[[c for c in show_cols if c in top_days.columns]].copy()
+        top_show["Datum"] = top_show["datum_dt"].dt.strftime("%d.%m.%Y")
+        top_show = top_show.rename(columns={
+            "fil_nr": "Filiale", "bundesland": "Bundesland",
+            "_budget_ist_day": "Budget", "abw_e_day": "Abw. €", "abw_pct_day": "Abw. %",
+        })
+        for c in ["Budget", "IST aktuell", "Abw. €"]:
+            if c in top_show.columns:
+                top_show[c] = top_show[c].apply(_fmt_de)
+        if "Abw. %" in top_show.columns:
+            top_show["Abw. %"] = top_show["Abw. %"].apply(_fmt_pct)
+        col_order = ["Filiale", "Bundesland", "Datum", "Budget", "IST aktuell", "Abw. €", "Abw. %"]
+        top_show = top_show[[c for c in col_order if c in top_show.columns]]
+
+        st.caption("Tage mit den größten prozentualen Abweichungen zwischen IST und Budget:")
+        st.dataframe(top_show, use_container_width=True, hide_index=True)
+
+        # Filialen-Aggregation
+        fil_abw = (df_day_valid.groupby("fil_nr", as_index=False)
+                   .agg(
+                       Budget=("_budget_ist_day", "sum"),
+                       IST=("IST aktuell", "sum"),
+                       n_tage=("abw_pct_day", "count"),
+                   ))
+        fil_abw["Abw. €"] = fil_abw["IST"] - fil_abw["Budget"]
+        fil_abw["Abw. %"] = fil_abw.apply(
+            lambda x: round(x["Abw. €"] / x["Budget"] * 100, 1) if x["Budget"] != 0 else None, axis=1
+        )
+        fil_abw["Genauigkeit %"] = fil_abw["Abw. %"].apply(
+            lambda x: round(100 - abs(x), 1) if pd.notna(x) else None
+        )
+        worst_fils = (pd.concat([
+            fil_abw.nlargest(5, "Abw. %", keep="all"),
+            fil_abw.nsmallest(5, "Abw. %", keep="all"),
+        ]).drop_duplicates().sort_values("Abw. %", key=abs, ascending=False).head(10))
+
+        worst_fils = worst_fils.rename(columns={"fil_nr": "Filiale", "n_tage": "Anz. Tage"})
+        for c in ["Budget", "IST"]:
+            worst_fils[c] = worst_fils[c].apply(_fmt_de)
+        worst_fils["Abw. €"] = worst_fils["Abw. €"].apply(_fmt_de)
+        worst_fils["Abw. %"] = worst_fils["Abw. %"].apply(_fmt_pct)
+        worst_fils["Genauigkeit %"] = worst_fils["Genauigkeit %"].apply(
+            lambda x: f"{x:.1f} %" if pd.notna(x) and x != "" else ""
+        )
+
+        st.caption("Filialen mit den größten Gesamtabweichungen (bisheriger IST-Zeitraum):")
+        col_order_f = ["Filiale", "Budget", "IST", "Abw. €", "Abw. %", "Genauigkeit %", "Anz. Tage"]
+        worst_fils = worst_fils[[c for c in col_order_f if c in worst_fils.columns]]
+        st.dataframe(worst_fils, use_container_width=True, hide_index=True)
 
 # ── Excel-Export ────────────────────────────────────────────────────────────
 st.divider()
