@@ -61,6 +61,14 @@
 - Preisanpassung: Planjahr-Auswahl entfernt; immer das aktuelle Budgetjahr (06/2026)
 - Herleitung: Δ€/Δ% nach =Budget entfernt; keine Zeilenmarkierung; Abw. IST nur bis letzten importierten Tag (06/2026)
 - Engine: eff_feiertag=0 für offene Feiertage (wie direct_ferien-Behandlung: Vergleich Feiertag↔Feiertag) (06/2026)
+- Filialstammdaten: flag_gesperrt (auto bei XX/XXX in Bezeichnung, manuell togglebar); gesperrte Filialen in Planung + Validierung ignoriert; Auto-Save ohne Speichern-Button (06/2026)
+- Ferien: Oster-/Frühjahrsferien → Osterferien überall umbenannt (06/2026)
+- Herleitung: 0-Werte leer; +Verteilung-Spalte entfernt; IST Basis per Live-Lookup aus ist_umsatz; ferien_art auch für Feiertag/Feiertagstag-Tage; eff_ferien immer leer für Ferien↔Ferien; Tagesinfo/Ferien Spaltenbreite automatisch (06/2026)
+- Validierung: gesperrte Filialen korrekt erkannt (Muster + Flag); Filialen-ohne-IST-Check exkludiert gesperrte (06/2026)
+- Datumsmapping: Ferienabschlag/-aufschlag — wenn kein gleicher Wochentag im VJ-Ferienzeitraum vorhanden, VORWÄRTS nächsten normalen Wochentag wählen; mapping_art='ferienabschlag' (06/2026)
+- Engine: ferienabschlag-Branch — ist_vj des normalen Basistags × Wachstum × Ferienfaktor → eff_ferien (06/2026)
+- Engine: _ferien_faktor_woche Fallback auf gesamte VJ-Ferienperiode wenn spez. Woche leer (06/2026)
+- Engine: _ferien_faktor_fallback für Ferientypen ohne VJ-Periode (nutzt letzten gleichen/beliebigen Ferientyp desselben BL) (06/2026)
 
 ---
 
@@ -70,7 +78,7 @@
 |---|-------|---------------|
 | 2 | **Sondertage-Legacy** abbauen: `sondertage`-Tabelle abschaffen, nur noch `feiertage` mit art='Sondertag' | Mittelfristig |
 | 4 | **Engine-Performance**: `_ist_on()` O(Tage×Zeilen). Lösung: Lookup-Dict `{(fil_nr, iso): umsatz}` einmalig bauen | Laufzeit |
-| 16 | **Herleitung: Neue Ferien ohne Vorjahreszeitraum**: eff_ferien via Durchschnitt der letzten verfügbaren Ferien-Perioden schätzen. Derzeit keine Periode → eff_ferien=0. | Mittelfristig |
+| 16 | **Herleitung: Neue Ferien ohne Vorjahreszeitraum**: Grundlogik implementiert via `_ferien_faktor_fallback` (letzten gleichen/beliebigen Ferientyp des BL verwenden). Noch zu prüfen: Qualität der Schätzung in der Praxis. | Niedrig |
 
 ---
 
@@ -92,6 +100,7 @@
 
 | Git-Hash | Beschreibung |
 |----------|-------------|
+| `98c4eaa` | Ferienabschlag-Logik (VORWÄRTS-Fallback, mapping_art='ferienabschlag', Engine-Branch); _ferien_faktor_fallback; Filialen Auto-Save |
 | `9544e68` | CLAUDE.md aufgeteilt in docs/architecture, ui-patterns, open-issues; Datenschutzregel |
 | `49000d9` | Feiertage/Ferien: BL-Filter, Schulferien auto alle 16 BL, Spaltenumbenennung; Datumsmapping: Feiertagstag in Basisbeschreibung; Validierung: 3 neue Vergleichs-Checks |
 | `39fc92b` | Plausibilitätsprüfungs-Seite (14_Validierung) mit Ampel-Checks |
