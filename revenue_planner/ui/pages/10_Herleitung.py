@@ -34,9 +34,9 @@ _ist_rows_hrl = conn.execute(
 ).fetchall()
 _ist_lookup_hrl = {(str(r["fil_nr"]), r["datum"]): r["umsatz"] for r in _ist_rows_hrl}
 
-eff_cols = ["ist_vj", "eff_oeffnung", "eff_verteilung", "eff_wochentag",
+eff_cols = ["ist_vj", "eff_oeffnung", "eff_wochentag",
             "eff_preis", "eff_ferien", "eff_feiertag", "budget"]
-for col in eff_cols + ["eff_norm"]:
+for col in eff_cols + ["eff_norm", "eff_verteilung"]:
     if col not in df_all.columns:
         df_all[col] = 0.0
     df_all[col] = pd.to_numeric(df_all[col], errors="coerce").fillna(0.0)
@@ -283,14 +283,25 @@ if zeit_ebene == "Tag":
 
     agg["ferien_art"] = agg.apply(_enrich_ferien_art, axis=1)
 
-    # Verteilung hat keinen Wert bei Sondertag/Feiertagstag/Feiertag (direkte Referenz).
-    _no_verteilung = agg["_daytype"].isin(["feiertag", "feiertagstag", "sondertag"])
-    agg.loc[_no_verteilung, "eff_verteilung"] = None
     # Ferien: Basis ist immer ein VJ-Ferientag (direkter Vergleich) → kein Ferieneffekt nötig.
-    # Ferien-Effekt und Verteilung werden für alle Ferien-Tage ausgeblendet.
     _ferien_rows = agg["_daytype"] == "ferien"
     agg.loc[_ferien_rows, "eff_ferien"] = None
-    agg.loc[_ferien_rows, "eff_verteilung"] = None
+
+    # IST Basis: direkt aus ist_umsatz per base_datum nachschlagen (statt gespeichertem ist_vj).
+    # So stimmt der Wert auch dann, wenn die Planung älter ist als das Datumsmapping.
+    if entity_ebene == "Filiale":
+        _base_ist_all = {
+            (str(r["fil_nr"]), r["datum"]): r["umsatz"]
+            for r in conn.execute("SELECT fil_nr, datum, umsatz FROM ist_umsatz").fetchall()
+        }
+        def _ist_basis_live(row):
+            iso = _row_iso(row)
+            bl = _row_bl(row)
+            base_d = _dm_lookup.get((iso, bl)) or _dm_lookup.get((iso, "alle")) or ""
+            if not base_d:
+                return row.get("ist_vj", 0.0)
+            return _base_ist_all.get((str(row["fil_nr"]), base_d), row.get("ist_vj", 0.0))
+        agg["ist_vj"] = agg.apply(_ist_basis_live, axis=1)
 
 # IST aktuell vs. Budget — nur bis zum letzten importierten Tag
 agg["Abw. €"] = agg.apply(
@@ -305,7 +316,7 @@ agg["Abw. %"] = agg.apply(
 
 rename = {
     "fil_nr": "Filiale", "bundesland": "Bundesland",
-    "ist_vj": "IST Basis", "eff_oeffnung": "+ Öffnung", "eff_verteilung": "+ Verteilung",
+    "ist_vj": "IST Basis", "eff_oeffnung": "+ Öffnung",
     "eff_wochentag": "+ Wochentag", "eff_preis": "+ Preis", "eff_ferien": "+ Ferien",
     "eff_feiertag": "+ Feiertag", "budget": "= Budget",
     "ist_aktuell": "= IST",
@@ -317,7 +328,7 @@ if zeit_ebene == "Tag":
     rename["_tagesinfo"] = "Tagesinfo"
     rename["ferien_art"] = "Ferien"
 
-drop_cols = ["_sort", "eff_norm", "_budget_for_ist", "_iso", "_daytype"] + [
+drop_cols = ["_sort", "eff_norm", "eff_verteilung", "_budget_for_ist", "_iso", "_daytype"] + [
     c for c in ["wochentag", "tagestyp", "feiertag_name"]
     if c in agg.columns and zeit_ebene == "Tag"
 ]
@@ -332,7 +343,7 @@ if zeit_ebene == "Tag":
     lead = [c for c in ["Filiale", "Datum", "Basisdatum", "Wt.", "Tagesinfo", "Ferien"] if c in disp.columns]
 else:
     lead = [c for c in ["Filiale", "Zeit"] if c in disp.columns]
-ordered = lead + ["IST Basis", "+ Öffnung", "+ Verteilung", "+ Wochentag", "+ Preis",
+ordered = lead + ["IST Basis", "+ Öffnung", "+ Wochentag", "+ Preis",
                   "+ Ferien", "+ Feiertag", "= Budget",
                   "= IST", "Abw. €", "Abw. %"]
 disp = disp[[c for c in ordered if c in disp.columns]]
@@ -359,13 +370,13 @@ m3.metric("Δ €", f"{'+' if tot_bud >= tot_vj else ''}{_de(tot_bud - tot_vj)} 
 m4.metric("Δ %", f"{(tot_bud - tot_vj) / tot_vj * 100:+.1f} %" if tot_vj else "–")
 
 st.caption(
-    "Lesart: **IST Basis** = Umsatz des korrespondierenden Basistags. "
+    "Lesart: **IST Basis** = tatsächlicher IST-Umsatz des Referenztags aus dem Basiszeitraum. "
     "Jede `+`-Spalte zeigt den additiven Effekt in €. Summe ergibt **= Budget**."
 )
 st.divider()
 
 # ── Tabelle ─────────────────────────────────────────────────────────────────
-num_cols = ["IST Basis", "+ Öffnung", "+ Verteilung", "+ Wochentag", "+ Preis",
+num_cols = ["IST Basis", "+ Öffnung", "+ Wochentag", "+ Preis",
             "+ Ferien", "+ Feiertag", "= Budget", "= IST", "Abw. €"]
 
 def _fmt_de(val):
@@ -413,9 +424,6 @@ col_cfg = {
         help="Tagesumsatz des Basiszeitraum-Referenztags (gleicher Wochentag, gleiches Monat im Vorjahr)"),
     "+ Öffnung":   st.column_config.TextColumn("+ Öffnung",
         help="Effekt durch geänderte Öffnungstage: positiv wenn Filiale im Planjahr mehr Tage geöffnet hat, negativ wenn weniger"),
-    "+ Verteilung":st.column_config.TextColumn("+ Verteilung",
-        help="Glättung: korrigiert, dass der konkrete Basistag über- oder unterdurchschnittlich war. "
-             "Basis-Einzeltag → Wochentagsdurchschnitt des Monats"),
     "+ Wochentag": st.column_config.TextColumn("+ Wochentag",
         help="Wochentagsmix-Effekt: Planjahr hat andere Wochentag-Verteilung als Basisjahr. "
              "Z.B. Jan 2026 hat einen Montag mehr als Jan 2025 → positiver Wert"),
@@ -470,9 +478,8 @@ with st.expander("📖 Legende — Spaltenbezeichnungen und Berechnungslogik", e
 
 | Spalte | Bedeutung | Beispiel |
 |--------|-----------|---------|
-| **IST Basis** | Tagesumsatz des korrespondierenden Basistags (gleicher Wochentag, gleicher Monat, Basisjahr) | Mo, 06.01.2025 → 5.234 € (Referenz für Mo, 05.01.2026) |
+| **IST Basis** | Tagesumsatz des korrespondierenden Basistags (gleicher Wochentag, Basisjahr, direkt aus IST-Daten) | Mo, 06.01.2025 → 5.234 € (Referenz für Mo, 05.01.2026) |
 | **+ Öffnung** | Effekt durch geänderte Öffnungstage im Planjahr | Filiale öffnet ab 2026 samstags (+432 €); geschlossener Feiertag (−2.500 €) |
-| **+ Verteilung** | Glättung: der konkrete Basistag wird auf den Wochentags-Ø des Monats normiert. Korrigiert, dass einzelne Basis-Tage zufällig über- oder unterdurchschnittlich waren. | Basistag 06.01.2025 hatte 6.000 €, Ø Montag Jan 25 = 5.500 € → Verteilung = −500 € |
 | **+ Wochentag** | Wochentagsmix-Effekt: hat Planjahr mehr/weniger bestimmte Wochentage als Basisjahr? | Jan 2026 hat 5 Montage, Jan 2025 hatte 4 → ein Montag-Anteil mehr → +200 € |
 | **+ Preis** | Preis-/Wachstumsfaktor aus den Preisanpassungsparametern (% je Monat) | 3 % im Jan → Basisbetrag × 3 % / offene Tage ≈ +53 € je Tag |
 | **+ Ferien** | Ferienfaktor: Verhältnis Ø Ferienwochenumsatz zu Ø Pufferwochenumsatz | Osterferien: +20 % → +1.100 €; Schulfiliale in Ferien: −40 % → −800 € |
@@ -482,28 +489,9 @@ with st.expander("📖 Legende — Spaltenbezeichnungen und Berechnungslogik", e
 ### Berechnungsformel (additiv je Tag)
 
 ```
-Budget = IST Basis + Öffnung + Verteilung + Wochentag + Preis + Ferien + Feiertag
+Budget = IST Basis + Öffnung + Wochentag + Preis + Ferien + Feiertag
 ```
 
 Diese Zerlegung addiert sich durch einfache Summation auf jede Zeit- und Aggregationsebene
 (Woche / Monat / Jahr, Filiale / Bundesland / Gesamt).
-
-### Wie funktioniert + Verteilung?
-
-**Ziel:** Den Einzeltag-Umsatz aus dem Basiszeitraum auf den *Wochentags-Durchschnitt*
-des jeweiligen Monats glätten, damit zufällige Hochs/Tiefs einzelner Basistage
-den Plan nicht verzerren.
-
-**Berechnung (Schritt-für-Schritt):**
-
-1. **IST Basis** = tatsächlicher Umsatz des Referenztags (z. B. Mo, 06.01.2025 = 5.234 €)
-2. **Ø Monatsumsatz je Wochentag** = Summe aller Montage im Basismonat Jan 2025 ÷ Anzahl Montage
-   → z. B. alle 4 Montage im Jan 2025 ergeben Ø 5.500 €
-3. **tag_basis** = Monats-IST × Anteil Wochentag am Monatsumsatz ÷ Anzahl dieses Wochentags im Monat
-   → entspricht dem „fairen" Anteil des Montags am Monatsergebnis
-4. **+ Verteilung** = tag_basis − IST Basis
-   → Korrektur: war der Basistag 266 € über dem Wochentags-Ø → Verteilung = −266 €
-
-**Hinweis:** Für Ferientage und Feiertage wird + Verteilung nicht angezeigt, da diese
-Tage direkt mit dem VJ-Vergleichstag verglichen werden (kein Glättungsbedarf).
 """)

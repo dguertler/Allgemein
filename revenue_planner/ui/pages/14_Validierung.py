@@ -31,16 +31,23 @@ def add(status, titel, details=None, caption=""):
 
 
 filialen_all = [dict(r) for r in conn.execute("SELECT * FROM filialen").fetchall()]
-# Gesperrte Filialen separat tracken und aus aktiver Liste heraushalten
-gesperrte = [f for f in filialen_all if f.get("flag_gesperrt")]
-filialen = [f for f in filialen_all if not f.get("flag_gesperrt")]
+
+import re as _re
+
+def _is_gesperrt(f) -> bool:
+    """Filiale gilt als gesperrt wenn flag_gesperrt=1 ODER XX/XXX in der Bezeichnung."""
+    if f.get("flag_gesperrt"):
+        return True
+    return bool(_re.search(r'X{2,}', str(f.get("bezeichnung") or ""), _re.IGNORECASE))
+
+gesperrte = [f for f in filialen_all if _is_gesperrt(f)]
+filialen = [f for f in filialen_all if not _is_gesperrt(f)]
 
 # Bundesländer die tatsächlich in den Filialen hinterlegt sind (normalisiert)
 _fil_bls = {_normalize_bl(f["bundesland"]) for f in filialen if f.get("bundesland")}
 RELEVANT_BL = _fil_bls & set(VALID_BL)  # nur bekannte, gültige BL
 
 # 0) Gesperrte Filialen (werden bei Planung ignoriert)
-import re as _re
 gesperrt_detail = pd.DataFrame([
     {"Filiale": f["fil_nr"], "Bezeichnung": f.get("bezeichnung") or "",
      "Grund": "XX/XXX in Bezeichnung (automatisch)" if _re.search(r'X{2,}', str(f.get("bezeichnung") or ""), _re.IGNORECASE) else "Manuell gesperrt"}
