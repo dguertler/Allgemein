@@ -39,18 +39,17 @@ def _is_vj_holiday(d: date, bl: str, engine) -> bool:
     )
 
 
-def _ferien_base_day(period: dict, woche: int, wt: int, blocked) -> tuple[date, bool]:
+def _ferien_base_day(period: dict, woche: int, wt: int, blocked, plan_month: int) -> tuple[date, bool]:
     """Pick the base-year reference day for a plan ferien day.
 
     Returns (base_date, is_Ferienabschlag) where is_Ferienabschlag=True means
-    no same-weekday ferien day existed in the VJ period and we fell back to the
-    nearest forward non-blocked normal day (Ferienabschlag/-aufschlag logic).
+    no same-weekday ferien day existed in the VJ period (restricted to the same
+    calendar month as the plan date) and we fell back to the nearest forward
+    non-blocked normal day (Ferienabschlag/-aufschlag logic).
 
-    Guarantees the result stays a *ferien* day in the matched VJ period
-    (same weekday, nearest week), skipping days that must never be a base
-    comparison (public holidays, Dec 24/31). Only if the VJ period contains
-    no usable same-weekday day at all does it search FORWARD first for the
-    nearest non-blocked same weekday after ferien end.
+    plan_month is used to restrict the in-period search to the same month as
+    the plan date, preventing Dec days (e.g. Dec 23) from matching a Jan plan
+    day when Weihnachtsferien is stored as a single Dec-Jan period.
     """
     vj_start = date.fromisoformat(period["start_vj"])
     vj_ende = date.fromisoformat(period["ende_vj"])
@@ -58,22 +57,29 @@ def _ferien_base_day(period: dict, woche: int, wt: int, blocked) -> tuple[date, 
     if wk_start > vj_ende:
         wk_start = vj_start
     ideal = wk_start + timedelta(days=(wt - wk_start.weekday()))
+
+    # Prefer same-month days (avoids Dec↔Jan cross-contamination in Weihnachtsferien)
     in_period = [d for d in _date_range(vj_start, vj_ende)
-                 if d.weekday() == wt and not blocked(d)]
+                 if d.weekday() == wt and not blocked(d) and d.month == plan_month]
+    if not in_period:
+        # Fallback: any month in the period (e.g. very short ferien entirely in one month)
+        in_period = [d for d in _date_range(vj_start, vj_ende)
+                     if d.weekday() == wt and not blocked(d)]
     if in_period:
         return min(in_period, key=lambda d: abs((d - ideal).days)), False
+
     # No usable same-weekday day inside the period — Ferienabschlag case.
     # Search FORWARD first (nearest normal day after ferien end), then backward.
-    for shift in range(1, 60):
-        alt = vj_ende + timedelta(days=1)
-        days_ahead = (wt - alt.weekday()) % 7
-        alt = alt + timedelta(days=days_ahead) + timedelta(weeks=shift - 1)
+    alt_base = vj_ende + timedelta(days=1)
+    days_ahead = (wt - alt_base.weekday()) % 7
+    for shift in range(0, 60):
+        alt = alt_base + timedelta(days=days_ahead) + timedelta(weeks=shift)
         if not blocked(alt):
             return alt, True
-    for shift in range(1, 60):
-        alt = vj_start - timedelta(days=1)
-        days_back = (alt.weekday() - wt) % 7
-        alt = alt - timedelta(days=days_back) - timedelta(weeks=shift - 1)
+    alt_base2 = vj_start - timedelta(days=1)
+    days_back = (alt_base2.weekday() - wt) % 7
+    for shift in range(0, 60):
+        alt = alt_base2 - timedelta(days=days_back) - timedelta(weeks=shift)
         if not blocked(alt):
             return alt, True
     return ideal, True
@@ -193,7 +199,7 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                             # a public holiday or Dec 24/31.
                             def _blocked(d, _bl=bl):
                                 return _is_vj_holiday(d, _bl, engine) or is_special_quasi_feiertag(d)
-                            base_d, _is_abschlag = _ferien_base_day(period, woche, wt, _blocked)
+                            base_d, _is_abschlag = _ferien_base_day(period, woche, wt, _blocked, month)
                             if _is_abschlag:
                                 mapping_art = "Ferienabschlag"
 

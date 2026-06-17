@@ -14,6 +14,54 @@ st.set_page_config(
     menu_items={},
 )
 
+# Brezel-Ladeanimation: zentrierte drehende Brezel statt dem Standard-Indikator oben rechts
+st.markdown("""
+<style>
+/* Standard-Ladeindikator oben rechts ausblenden */
+[data-testid="stStatusWidget"] { display: none !important; }
+
+@keyframes brezel-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+#brezel-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(255,255,255,0.65);
+    z-index: 99999;
+    justify-content: center;
+    align-items: center;
+}
+#brezel-overlay.active { display: flex; }
+#brezel-icon {
+    font-size: 72px;
+    animation: brezel-spin 0.9s linear infinite;
+    user-select: none;
+}
+</style>
+<div id="brezel-overlay"><div id="brezel-icon">🥨</div></div>
+<script>
+(function() {
+    function setActive(on) {
+        var el = document.getElementById('brezel-overlay');
+        if (el) el.classList.toggle('active', on);
+    }
+    var obs = new MutationObserver(function() {
+        var w = document.querySelector('[data-testid="stStatusWidget"]');
+        setActive(!!w && w.children.length > 0);
+    });
+    function init() {
+        obs.observe(document.body, { childList: true, subtree: true, attributes: true });
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else { init(); }
+})();
+</script>
+""", unsafe_allow_html=True)
+
 ASSETS = BASE / "ui" / "assets"
 
 
