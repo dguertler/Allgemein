@@ -32,7 +32,20 @@ def _date_range(start: date, end: date) -> Iterator[date]:
 
 
 def _is_vj_holiday(d: date, bl: str, engine) -> bool:
-    """True if d is an actual public holiday (art='feiertag') in the base year for bl."""
+    """True if d is an actual public holiday (art='feiertag') in the base year for bl.
+
+    Holidays are stored keyed by their plan-year date (datum_plan); the base-year
+    equivalent lives in the datum_vj column. The engine pre-builds feiertage_vj
+    (keyed by datum_vj) so a base-year date like 2025-01-06 (Epiphany) is correctly
+    recognised as a holiday and never used as a base-comparison day.
+    """
+    feiertage_vj = getattr(engine, "feiertage_vj", None)
+    if feiertage_vj is not None:
+        return any(
+            fe["bundesland"] in ("alle", bl)
+            for fe in feiertage_vj.get(d.isoformat(), [])
+        )
+    # Fallback for older engine instances without feiertage_vj
     return any(
         fe.get("art") == "feiertag" and fe["bundesland"] in ("alle", bl)
         for fe in engine.feiertage.get(d.isoformat(), [])
@@ -237,8 +250,11 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                                 or d.isoformat() in _vj_ferien_bl.get(_bl, set())
                                 or is_special_quasi_feiertag(d))
                     if _avoid(base_d):
+                        # Forward first (nearest normal week after the blocked day),
+                        # mirroring the ferien fallback; avoids landing in the atypical
+                        # Christmas week (e.g. Jan 6 Epiphany → Jan 13, not Dec 30).
                         for shift in range(1, 9):
-                            for direction in (-1, 1):
+                            for direction in (1, -1):
                                 alt = base_d + timedelta(weeks=shift * direction)
                                 if not _avoid(alt):
                                     base_d = alt

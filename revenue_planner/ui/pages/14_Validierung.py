@@ -54,7 +54,7 @@ gesperrt_detail = pd.DataFrame([
     for f in gesperrte
 ]) if gesperrte else None
 add("warn" if gesperrte else "ok",
-    f"⚠️ Gesperrte Filialen (werden ignoriert): {len(gesperrte)}",
+    f"Gesperrte Filialen (werden ignoriert): {len(gesperrte)}",
     gesperrt_detail,
     "Gesperrte Filialen fließen nicht in Planung, Herleitung und Auswertung ein. "
     "Automatisch gesperrt bei XX oder XXX in der Filialbezeichnung; zusätzlich manuell einstellbar.")

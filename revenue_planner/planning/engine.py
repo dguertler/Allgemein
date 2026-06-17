@@ -220,11 +220,21 @@ class PlanningEngine:
         # Only art='feiertag' — feiertagstage (Vor-/Nachtage) are treated as normal open days
         rows = c.execute("SELECT datum_plan, datum_vj, name, bundesland, art FROM feiertage").fetchall()
         self.feiertage: dict[str, list[dict]] = {}
+        # VJ-Feiertage: {datum_vj → list of {name, bundesland}} — nur art='feiertag'.
+        # Wird gebraucht, um beim Datumsmapping Basistage zu erkennen, die im
+        # Basisjahr ein Feiertag sind (feiertage ist nach datum_plan indiziert,
+        # daher findet eine Suche nach Basisjahr-Datum dort sonst nichts).
+        self.feiertage_vj: dict[str, list[dict]] = {}
         for r in rows:
+            art = r["art"] if r["art"] else "feiertag"
             self.feiertage.setdefault(r["datum_plan"], []).append(
                 {"name": r["name"], "datum_vj": r["datum_vj"], "bundesland": r["bundesland"],
-                 "art": r["art"] if r["art"] else "feiertag"}
+                 "art": art}
             )
+            if art == "feiertag" and r["datum_vj"]:
+                self.feiertage_vj.setdefault(r["datum_vj"], []).append(
+                    {"name": r["name"], "bundesland": r["bundesland"]}
+                )
 
         # Sondertage (Legacy-Tabelle)
         rows = c.execute("SELECT datum_plan, datum_referenz, bezeichnung, methode, bundesland FROM sondertage").fetchall()
