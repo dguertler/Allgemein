@@ -16,10 +16,22 @@ st.caption(f"Firma: **{get_gmbh()}**")
 st.info(
     "Das Datumsmapping ordnet jedem Budgettag im Planjahr einen korrekten Basistag "
     "im Basiszeitraum zu — wochentagsbasiert, mit Feiertags- und Feriensonderbehandlung. "
-    "Es muss neu generiert werden, wenn Feiertage oder Ferien geändert wurden."
+    "Es wird automatisch neu generiert wenn Feiertage, Sondertage oder Ferien gespeichert werden."
 )
 
 planjahr = get_budgetjahr()
+
+if st.button("🔄 Datumsmapping neu generieren", type="primary"):
+    try:
+        from planning.engine import PlanningEngine, PlanParams
+        from planning.datumsmapping import generate_datumsmapping
+        from datetime import date as _today_date
+        _engine = PlanningEngine(conn, PlanParams(planjahr=planjahr, stichtag=_today_date.today()))
+        n = generate_datumsmapping(conn, planjahr, _engine)
+        st.toast(f"✅ Datumsmapping generiert: {n} Einträge")
+        st.rerun()
+    except Exception as e:
+        st.error(f"Fehler: {e}")
 
 MAPPING_ART_LABELS = {
     "feiertag":      "Feiertag",
@@ -73,7 +85,7 @@ def _ferien_label_for(iso_str: str, bl: str, fer_df: pd.DataFrame) -> str:
 if df.empty:
     st.warning(
         f"Kein Mapping für Budgetjahr **{planjahr}** vorhanden. "
-        "Bitte über den Button oben generieren."
+        "Bitte oben auf **Datumsmapping neu generieren** klicken."
     )
     st.stop()
 
