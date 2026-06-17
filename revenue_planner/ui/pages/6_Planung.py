@@ -87,24 +87,42 @@ if st.session_state.get("_confirm_replan"):
 
 if st.session_state.get("_do_plan"):
     st.session_state["_do_plan"] = False
-    with st.spinner(f"Berechne {len(selected_fils)} Filiale(n)…"):
-        try:
-            engine = PlanningEngine(conn, params)
-            results = engine.run(selected_fils)
-            # Clear ALL planning data for this year before saving — ensures
-            # the table never contains stale results from previous partial runs
-            conn.execute(
-                "DELETE FROM planung WHERE CAST(strftime('%Y', datum) AS INTEGER)=?",
-                (planjahr,)
-            )
-            conn.commit()
-            engine.save(results)
-            st.success(f"✅ {len(selected_fils)} Filiale(n) — {len(results):,} Tage berechnet.")
-            st.session_state["last_plan_results"] = results
-            st.session_state["last_plan_jahr"] = planjahr
-        except Exception as e:
-            st.error(f"Fehler: {e}")
-            st.exception(e)
+    try:
+        engine = PlanningEngine(conn, params)
+        # Gesperrte und inaktive Filialen vorab herausfiltern, damit der
+        # Fortschrittsbalken nur aktive Filialen zählt.
+        aktive_fils = [
+            fn for fn in selected_fils
+            if not engine.filialen.get(fn, {}).get("flag_gesperrt")
+            and not engine.filialen.get(fn, {}).get("flag_inaktiv")
+        ]
+        n_total = len(aktive_fils)
+        n_skip  = len(selected_fils) - n_total
+
+        results: list[DayPlan] = []
+        progress_bar = st.progress(0, text="Starte Berechnung…")
+        for i, fil_nr in enumerate(aktive_fils, start=1):
+            pct = int(i / n_total * 100) if n_total else 100
+            progress_bar.progress(pct, text=f"Filiale {fil_nr} … {pct} % ({i}/{n_total})")
+            results.extend(engine.plan_branch(fil_nr))
+        progress_bar.empty()
+
+        # Clear ALL planning data for this year before saving — ensures
+        # the table never contains stale results from previous partial runs
+        conn.execute(
+            "DELETE FROM planung WHERE CAST(strftime('%Y', datum) AS INTEGER)=?",
+            (planjahr,)
+        )
+        conn.commit()
+        engine.save(results)
+        skip_hint = f" ({n_skip} gesperrt/inaktiv übersprungen)" if n_skip else ""
+        st.success(f"✅ {n_total} Filiale(n){skip_hint} — {len(results):,} Tage berechnet.")
+        st.session_state["last_plan_results"] = results
+        st.session_state["last_plan_jahr"] = planjahr
+    except Exception as e:
+        progress_bar.empty() if "progress_bar" in dir() else None
+        st.error(f"Fehler: {e}")
+        st.exception(e)
 
 
 def _de(val) -> str:
