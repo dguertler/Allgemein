@@ -942,3 +942,33 @@ class PlanningEngine:
             rows,
         )
         self.conn.commit()
+
+    def fix_ist_vj(self, planjahr: int):
+        """Update ist_vj in planung using datumsmapping + ist_umsatz (SQL, fast).
+
+        Called after save() and after datumsmapping regeneration so the stored
+        ist_vj is always in sync with the current mapping — eliminating the need
+        for a row-by-row Python apply on the Herleitung page.
+        """
+        self.conn.execute("""
+            UPDATE planung
+            SET ist_vj = COALESCE(
+                (SELECT i.umsatz
+                 FROM datumsmapping dm
+                 JOIN ist_umsatz i
+                   ON i.fil_nr = planung.fil_nr AND i.datum = dm.base_datum
+                 WHERE dm.plan_datum = planung.datum
+                   AND dm.bundesland = planung.bundesland
+                 LIMIT 1),
+                (SELECT i.umsatz
+                 FROM datumsmapping dm
+                 JOIN ist_umsatz i
+                   ON i.fil_nr = planung.fil_nr AND i.datum = dm.base_datum
+                 WHERE dm.plan_datum = planung.datum
+                   AND dm.bundesland = 'alle'
+                 LIMIT 1),
+                planung.ist_vj
+            )
+            WHERE CAST(strftime('%Y', datum) AS INTEGER) = ?
+        """, (planjahr,))
+        self.conn.commit()

@@ -31,6 +31,13 @@ if st.button("🔄 Datumsmapping neu generieren", type="primary"):
         with st.spinner("Datumsmapping wird generiert…"):
             _engine = PlanningEngine(conn, PlanParams(planjahr=planjahr, stichtag=_stichtag))
             n = generate_datumsmapping(conn, planjahr, _engine)
+            # Planungs-ist_vj mit neuem Mapping synchronisieren (falls vorhanden)
+            _plan_exists = conn.execute(
+                "SELECT COUNT(*) FROM planung WHERE CAST(strftime('%Y', datum) AS INTEGER)=?",
+                (planjahr,)
+            ).fetchone()[0]
+            if _plan_exists:
+                _engine.fix_ist_vj(planjahr)
         st.toast(f"✅ Datumsmapping generiert: {n} Einträge")
         st.rerun()
     except Exception as e:

@@ -115,6 +115,7 @@ if st.session_state.get("_do_plan"):
         )
         conn.commit()
         engine.save(results)
+        engine.fix_ist_vj(planjahr)
         skip_hint = f" ({n_skip} gesperrt/inaktiv übersprungen)" if n_skip else ""
         st.success(f"✅ {n_total} Filiale(n){skip_hint} — {len(results):,} Tage berechnet.")
         st.session_state["last_plan_results"] = results

@@ -60,21 +60,9 @@ _dm_rows = conn.execute(
 _dm_lookup = {(r["plan_datum"], r["bundesland"]): r["base_datum"] for r in _dm_rows}
 _dm_typ_lookup = {(r["plan_datum"], r["bundesland"]): r["plan_typ"] for r in _dm_rows}
 
-# IST Basis live: ist_vj 1:1 aus Datumsmapping + ist_umsatz ersetzen (vor Aggregation,
-# damit alle Aggregationsstufen den richtigen Basistag-Umsatz verwenden).
-_base_ist_all = {
-    (str(r["fil_nr"]), r["datum"]): r["umsatz"]
-    for r in conn.execute("SELECT fil_nr, datum, umsatz FROM ist_umsatz").fetchall()
-}
-def _live_ist_vj(row) -> float:
-    iso = row["_iso"]
-    bl = _nbl_hrl(str(row.get("bundesland", "") or ""))
-    base_d = _dm_lookup.get((iso, bl)) or _dm_lookup.get((iso, "alle")) or ""
-    if not base_d:
-        return float(row["ist_vj"])
-    val = _base_ist_all.get((str(row["fil_nr"]), base_d))
-    return float(val) if val is not None else float(row["ist_vj"])
-df_all["ist_vj"] = df_all.apply(_live_ist_vj, axis=1)
+# ist_vj ist nach dem Planungslauf bereits korrekt in planung gespeichert
+# (fix_ist_vj synchronisiert es nach jedem Planungslauf und Datumsmapping-Neugenerierung).
+# Kein row-by-row apply nötig.
 
 def _base_datum_for(row) -> str:
     iso = row["datum"].strftime("%Y-%m-%d")
@@ -92,10 +80,23 @@ _last_ist_date = conn.execute(
     "SELECT MAX(datum) FROM ist_umsatz WHERE datum LIKE ?", (f"{planjahr}-%",)
 ).fetchone()[0] or ""
 
-df_all["ist_aktuell"] = df_all.apply(
-    lambda r: _ist_lookup_hrl.get((str(r["fil_nr"]), r["datum"].strftime("%Y-%m-%d"))),
-    axis=1
-)
+if _ist_rows_hrl:
+    _ist_df_hrl = pd.DataFrame(
+        [(str(r["fil_nr"]), r["datum"], r["umsatz"]) for r in _ist_rows_hrl],
+        columns=["fil_nr", "_iso_key", "ist_aktuell"]
+    )
+    df_all["fil_nr_str"] = df_all["fil_nr"].astype(str)
+    df_all = df_all.merge(
+        _ist_df_hrl, left_on=["fil_nr_str", "_iso"], right_on=["fil_nr", "_iso_key"], how="left"
+    ).drop(columns=["fil_nr_x" if "fil_nr_x" in df_all.columns else "fil_nr_str",
+                     "_iso_key", "fil_nr_y" if "fil_nr_y" in df_all.columns else "fil_nr_str"],
+           errors="ignore")
+    # merge erzeugt ggf. fil_nr_x/fil_nr_y — bereinigen
+    if "fil_nr_x" in df_all.columns:
+        df_all = df_all.rename(columns={"fil_nr_x": "fil_nr"}).drop(columns=["fil_nr_y"], errors="ignore")
+    df_all = df_all.drop(columns=["fil_nr_str"], errors="ignore")
+else:
+    df_all["ist_aktuell"] = None
 if "bundesland" not in df_all.columns or df_all["bundesland"].isna().all():
     bl_map = {r[0]: r[1] for r in conn.execute("SELECT fil_nr, bundesland FROM filialen").fetchall()}
     df_all["bundesland"] = df_all["fil_nr"].map(bl_map).fillna("?")
@@ -188,9 +189,8 @@ if zeit_ebene == "Tag":
 
 # Budget up to last imported day (for Abw. IST comparison)
 if _last_ist_date:
-    df_all["_budget_for_ist"] = df_all.apply(
-        lambda r: r["budget"] if r["datum"].strftime("%Y-%m-%d") <= _last_ist_date else None,
-        axis=1
+    df_all["_budget_for_ist"] = df_all["budget"].where(
+        df_all["_iso"] <= _last_ist_date, other=None
     )
 else:
     df_all["_budget_for_ist"] = None
