@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS filialen (
     flag_manuell    INTEGER NOT NULL DEFAULT 0,   -- 1 = Monatswert wird überschrieben
     flag_neue_filiale INTEGER NOT NULL DEFAULT 0, -- 1 = neue Filiale (manueller Planwert)
     flag_inaktiv    INTEGER NOT NULL DEFAULT 0,   -- 1 = ab eroeffnung_ende geschlossen
+    flag_gesperrt   INTEGER NOT NULL DEFAULT 0,   -- 1 = gesperrt (auto bei XX/XXX in Bezeichnung)
     eroeffnung_ende TEXT,                   -- Schliessungsdatum
     ramadan_sensitiv INTEGER NOT NULL DEFAULT 0,  -- 1 = Filiale von Ramadan betroffen
     geplanter_umsatz_monat REAL,               -- manueller Planwert je Monat (neue Filialen)
@@ -249,6 +250,7 @@ def _migrate(conn: sqlite3.Connection):
     additions = [
         ("flag_kein_wachstum", "INTEGER NOT NULL DEFAULT 0"),
         ("geplanter_umsatz_monat", "REAL"),
+        ("flag_gesperrt", "INTEGER NOT NULL DEFAULT 0"),
     ]
     for col, definition in additions:
         if col not in existing:

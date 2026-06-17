@@ -845,6 +845,9 @@ class PlanningEngine:
         targets = fil_nrs if fil_nrs else list(self.filialen.keys())
         out: list[DayPlan] = []
         for fil_nr in targets:
+            fil = self.filialen.get(fil_nr, {})
+            if fil.get("flag_gesperrt"):
+                continue
             out.extend(self.plan_branch(fil_nr))
         return out
 

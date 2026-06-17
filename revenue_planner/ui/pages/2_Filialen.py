@@ -59,7 +59,7 @@ tab1, tab2 = st.tabs(["Filialen", "Massenimport"])
 # ── Tab 1: Inline editable table ──────────────────────────────────────────
 with tab1:
     cols_needed = ["fil_nr", "bezeichnung", "bundesland", "eroeffnung_ende",
-                   "flag_kein_wachstum", "eroeffnung", "geplanter_umsatz_monat"]
+                   "flag_kein_wachstum", "flag_gesperrt", "eroeffnung", "geplanter_umsatz_monat"]
     existing_cols = [r[1] for r in conn.execute("PRAGMA table_info(filialen)").fetchall()]
     select_cols = [c for c in cols_needed if c in existing_cols]
     df = pd.read_sql(
@@ -72,6 +72,11 @@ with tab1:
     for col in ["eroeffnung", "eroeffnung_ende"]:
         df[col] = pd.to_datetime(df[col], errors="coerce")
     df["flag_kein_wachstum"] = df["flag_kein_wachstum"].fillna(0).astype(bool)
+    df["flag_gesperrt"] = df["flag_gesperrt"].fillna(0).astype(bool)
+    # Auto-detect XX/XXX in bezeichnung → vorschlagsweise gesperrt
+    import re as _re
+    _xx_mask = df["bezeichnung"].fillna("").apply(lambda b: bool(_re.search(r'X{2,}', str(b), _re.IGNORECASE)))
+    df.loc[_xx_mask, "flag_gesperrt"] = True
     df["geplanter_umsatz_monat"] = pd.to_numeric(
         df["geplanter_umsatz_monat"], errors="coerce"
     ).fillna(0.0)
@@ -93,6 +98,11 @@ with tab1:
             "flag_kein_wachstum": st.column_config.CheckboxColumn(
                 "Kein Wachstum", width=105
             ),
+            "flag_gesperrt": st.column_config.CheckboxColumn(
+                "Gesperrt", width=80,
+                help="Gesperrte Filialen werden bei Planung und Auswertung ignoriert. "
+                     "Wird automatisch gesetzt wenn XX oder XXX in der Bezeichnung steht."
+            ),
             "eroeffnung": st.column_config.DateColumn(
                 "Eröffnung", format="DD.MM.YYYY", width=100
             ),
@@ -104,8 +114,8 @@ with tab1:
             ),
         },
         column_order=[
-            "fil_nr", "bezeichnung", "bundesland", "eroeffnung_ende",
-            "flag_kein_wachstum", "eroeffnung", "geplanter_umsatz_monat",
+            "fil_nr", "bezeichnung", "bundesland", "flag_gesperrt",
+            "eroeffnung_ende", "flag_kein_wachstum", "eroeffnung", "geplanter_umsatz_monat",
         ],
         num_rows="dynamic",
         use_container_width=True,
@@ -170,14 +180,18 @@ with tab1:
                 eroeffnung_ende_iso = _to_iso(row.get("eroeffnung_ende"))
                 kein_wachstum = int(bool(row.get("flag_kein_wachstum")))
                 gum = float(row.get("geplanter_umsatz_monat") or 0)
+                # Auto-gesperrt wenn XX/XXX in Bezeichnung; sonst manueller Wert
+                import re as _re
+                _has_xx = bool(_re.search(r'X{2,}', str(bezeichnung or ""), _re.IGNORECASE))
+                gesperrt = 1 if (_has_xx or bool(row.get("flag_gesperrt"))) else 0
 
                 conn.execute("""
                     INSERT OR REPLACE INTO filialen
                         (fil_nr, bezeichnung, bundesland, eroeffnung, eroeffnung_ende,
-                         flag_kein_wachstum, geplanter_umsatz_monat)
-                    VALUES (?,?,?,?,?,?,?)
+                         flag_kein_wachstum, flag_gesperrt, geplanter_umsatz_monat)
+                    VALUES (?,?,?,?,?,?,?,?)
                 """, (fn, bezeichnung, bl, eroeffnung_iso, eroeffnung_ende_iso,
-                      kein_wachstum, gum))
+                      kein_wachstum, gesperrt, gum))
 
                 if eroeffnung_iso and gum > 0:
                     try:

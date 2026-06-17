@@ -16,6 +16,9 @@ vj = planjahr - 1
 # One-time migration: rename old ferien art labels in ferien_kalender + ferien tables
 _FERIEN_RENAME_MIGRATION = {
     "Oster-/Frühjahrferien": "Osterferien",
+    "Oster-/Frühjahrsferien": "Osterferien",
+    "Frühjahrsferien": "Osterferien",
+    "Frühjahrsferien (Osterferien)": "Osterferien",
     "Himmelfahrts-/Pfingstferien": "Pfingstferien",
 }
 for _old, _new in _FERIEN_RENAME_MIGRATION.items():
@@ -32,6 +35,9 @@ BUNDESLAENDER = ["BB", "BE", "BW", "BY", "HB", "HE", "HH", "MV",
 # Rename overlong ferien art labels from the holidays library to short display names
 FERIEN_ART_RENAME: dict[str, str] = {
     "Oster-/Frühjahrferien": "Osterferien",
+    "Oster-/Frühjahrsferien": "Osterferien",
+    "Frühjahrsferien": "Osterferien",
+    "Frühjahrsferien (Osterferien)": "Osterferien",
     "Himmelfahrts-/Pfingstferien": "Pfingstferien",
 }
 

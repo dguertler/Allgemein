@@ -89,6 +89,12 @@ for col in ["tagestyp", "feiertag_name", "ferien_art"]:
         df_all[col] = ""
     df_all[col] = df_all[col].fillna("")
 
+# Gesperrte Filialen aus Anzeige entfernen
+_gesperrte_fils = {str(r[0]) for r in conn.execute(
+    "SELECT fil_nr FROM filialen WHERE flag_gesperrt=1").fetchall()}
+if _gesperrte_fils:
+    df_all = df_all[~df_all["fil_nr"].astype(str).isin(_gesperrte_fils)]
+
 # Filter out branches with no meaningful data (all budget and ist_vj = 0)
 fil_has_data = df_all.groupby("fil_nr")[["budget", "ist_vj"]].sum().abs().sum(axis=1) > 0
 active_fils = set(fil_has_data[fil_has_data].index)
@@ -190,8 +196,7 @@ def _build_tagesinfo(tagestyp, feiertag_name):
     name = feiertag_name or ""
     if typ in ("feiertag", "sondertag") and name:
         parts.append(name)
-    elif typ == "feiertagstag":
-        parts.append(name or "Feiertagstag")
+    # feiertagstag: nicht mehr in Tagesinfo anzeigen (liegt ggf. in Ferien → Ferien-Spalte)
     elif typ == "geschlossen":
         if name:
             parts.append(f"Geschlossen ({name})")
@@ -244,12 +249,48 @@ if zeit_ebene == "Tag":
         lambda r: _build_tagesinfo(r.get("tagestyp", ""), r.get("feiertag_name", "")),
         axis=1)
 
-    # Verteilung hat keinen Wert bei Sondertag/Feiertagstag/Feiertag/Ferien.
-    _no_verteilung = agg["_daytype"].isin(["feiertag", "feiertagstag", "sondertag", "ferien"])
+    # Für Feiertag/Feiertagstag-Tage die Ferienbezeichnung aus ferien_kalender nachschlagen,
+    # damit die Ferien-Spalte auch dann befüllt ist, wenn der Feiertag in Ferien fällt.
+    _ferien_kal_rows = conn.execute(
+        "SELECT bundesland, art, start, ende FROM ferien_kalender "
+        "WHERE jahr=? OR jahr=?", (planjahr, planjahr - 1)
+    ).fetchall()
+    def _ferien_art_for_date(iso_date: str, bl: str) -> str:
+        try:
+            d = pd.Timestamp(iso_date).date()
+        except Exception:
+            return ""
+        for r in _ferien_kal_rows:
+            if r["bundesland"] != bl:
+                continue
+            try:
+                if pd.Timestamp(r["start"]).date() <= d <= pd.Timestamp(r["ende"]).date():
+                    return r["art"]
+            except Exception:
+                pass
+        return ""
+
+    def _enrich_ferien_art(row):
+        existing = str(row.get("ferien_art") or "")
+        if existing:
+            return existing
+        daytype = str(row.get("_daytype") or "")
+        if daytype in ("feiertag", "feiertagstag"):
+            iso = str(row.get("_iso") or "")
+            bl = _row_bl(row)
+            return _ferien_art_for_date(iso, bl)
+        return existing
+
+    agg["ferien_art"] = agg.apply(_enrich_ferien_art, axis=1)
+
+    # Verteilung hat keinen Wert bei Sondertag/Feiertagstag/Feiertag (direkte Referenz).
+    _no_verteilung = agg["_daytype"].isin(["feiertag", "feiertagstag", "sondertag"])
     agg.loc[_no_verteilung, "eff_verteilung"] = None
-    # Ferien-Effekt leer, wenn Ferien mit Ferien verglichen wird (kein Differenzeffekt).
-    _ferien_vs_ferien = (agg["_daytype"] == "ferien") & (agg["eff_ferien"].abs() < 0.005)
-    agg.loc[_ferien_vs_ferien, "eff_ferien"] = None
+    # Ferien: Basis ist immer ein VJ-Ferientag (direkter Vergleich) → kein Ferieneffekt nötig.
+    # Ferien-Effekt und Verteilung werden für alle Ferien-Tage ausgeblendet.
+    _ferien_rows = agg["_daytype"] == "ferien"
+    agg.loc[_ferien_rows, "eff_ferien"] = None
+    agg.loc[_ferien_rows, "eff_verteilung"] = None
 
 # IST aktuell vs. Budget — nur bis zum letzten importierten Tag
 agg["Abw. €"] = agg.apply(
@@ -334,7 +375,10 @@ def _fmt_de(val):
     except (TypeError, ValueError):
         pass
     try:
-        return f"{float(val):,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        f = float(val)
+        if f == 0.0:
+            return ""
+        return f"{f:,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except (TypeError, ValueError):
         return ""
 
@@ -357,6 +401,12 @@ if "Abw. %" in disp_fmt.columns:
     disp_fmt["Abw. %"] = disp_fmt["Abw. %"].apply(_fmt_pct)
 
 col_cfg = {
+    "Tagesinfo":    st.column_config.TextColumn("Tagesinfo",
+        help="Feiertag, Sondertag oder Schließtag",
+        width="medium"),
+    "Ferien":       st.column_config.TextColumn("Ferien",
+        help="Ferienname wenn der Tag in einer Schulferienperiode liegt",
+        width="medium"),
     "Basisdatum":   st.column_config.TextColumn("Basisdatum",
         help="Referenztag aus dem Basiszeitraum, dessen IST-Umsatz als Grundlage dient"),
     "IST Basis":    st.column_config.TextColumn("IST Basis",
@@ -385,8 +435,6 @@ col_cfg = {
         help="IST − Budget (positiv = über Budget, negativ = unter Budget)"),
     "Abw. %":      st.column_config.TextColumn("Abw. %",
         help="Abweichung IST vs. Budget in Prozent (ohne Nachkommastellen)"),
-    "Ferien":      st.column_config.TextColumn("Ferien",
-        help="Ferienname wenn der Tag in einer Schulferienperiode liegt"),
 }
 
 st.dataframe(
@@ -439,4 +487,23 @@ Budget = IST Basis + Öffnung + Verteilung + Wochentag + Preis + Ferien + Feiert
 
 Diese Zerlegung addiert sich durch einfache Summation auf jede Zeit- und Aggregationsebene
 (Woche / Monat / Jahr, Filiale / Bundesland / Gesamt).
+
+### Wie funktioniert + Verteilung?
+
+**Ziel:** Den Einzeltag-Umsatz aus dem Basiszeitraum auf den *Wochentags-Durchschnitt*
+des jeweiligen Monats glätten, damit zufällige Hochs/Tiefs einzelner Basistage
+den Plan nicht verzerren.
+
+**Berechnung (Schritt-für-Schritt):**
+
+1. **IST Basis** = tatsächlicher Umsatz des Referenztags (z. B. Mo, 06.01.2025 = 5.234 €)
+2. **Ø Monatsumsatz je Wochentag** = Summe aller Montage im Basismonat Jan 2025 ÷ Anzahl Montage
+   → z. B. alle 4 Montage im Jan 2025 ergeben Ø 5.500 €
+3. **tag_basis** = Monats-IST × Anteil Wochentag am Monatsumsatz ÷ Anzahl dieses Wochentags im Monat
+   → entspricht dem „fairen" Anteil des Montags am Monatsergebnis
+4. **+ Verteilung** = tag_basis − IST Basis
+   → Korrektur: war der Basistag 266 € über dem Wochentags-Ø → Verteilung = −266 €
+
+**Hinweis:** Für Ferientage und Feiertage wird + Verteilung nicht angezeigt, da diese
+Tage direkt mit dem VJ-Vergleichstag verglichen werden (kein Glättungsbedarf).
 """)

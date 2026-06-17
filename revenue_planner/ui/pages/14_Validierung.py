@@ -30,11 +30,27 @@ def add(status, titel, details=None, caption=""):
     checks.append((status, titel, details, caption))
 
 
-filialen = [dict(r) for r in conn.execute("SELECT * FROM filialen").fetchall()]
+filialen_all = [dict(r) for r in conn.execute("SELECT * FROM filialen").fetchall()]
+# Gesperrte Filialen separat tracken und aus aktiver Liste heraushalten
+gesperrte = [f for f in filialen_all if f.get("flag_gesperrt")]
+filialen = [f for f in filialen_all if not f.get("flag_gesperrt")]
 
 # Bundesländer die tatsächlich in den Filialen hinterlegt sind (normalisiert)
 _fil_bls = {_normalize_bl(f["bundesland"]) for f in filialen if f.get("bundesland")}
 RELEVANT_BL = _fil_bls & set(VALID_BL)  # nur bekannte, gültige BL
+
+# 0) Gesperrte Filialen (werden bei Planung ignoriert)
+import re as _re
+gesperrt_detail = pd.DataFrame([
+    {"Filiale": f["fil_nr"], "Bezeichnung": f.get("bezeichnung") or "",
+     "Grund": "XX/XXX in Bezeichnung (automatisch)" if _re.search(r'X{2,}', str(f.get("bezeichnung") or ""), _re.IGNORECASE) else "Manuell gesperrt"}
+    for f in gesperrte
+]) if gesperrte else None
+add("warn" if gesperrte else "ok",
+    f"⚠️ Gesperrte Filialen (werden ignoriert): {len(gesperrte)}",
+    gesperrt_detail,
+    "Gesperrte Filialen fließen nicht in Planung, Herleitung und Auswertung ein. "
+    "Automatisch gesperrt bei XX oder XXX in der Filialbezeichnung; zusätzlich manuell einstellbar.")
 
 # 1) Filialen ohne/mit unbekanntem Bundesland
 bad_bl = [
