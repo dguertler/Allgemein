@@ -299,12 +299,15 @@ class PlanningEngine:
 
         # Datumsmapping: {(plan_datum, bundesland) → base_datum_str} — nur für planjahr
         dm_rows = c.execute(
-            "SELECT plan_datum, base_datum, bundesland FROM datumsmapping "
+            "SELECT plan_datum, base_datum, bundesland, mapping_art FROM datumsmapping "
             "WHERE CAST(strftime('%Y', plan_datum) AS INTEGER) = ?",
             (p.planjahr,)
         ).fetchall()
         self._datumsmapping: dict[tuple, str] = {
             (r["plan_datum"], r["bundesland"]): r["base_datum"] for r in dm_rows
+        }
+        self._datumsmapping_art: dict[tuple, str] = {
+            (r["plan_datum"], r["bundesland"]): r["mapping_art"] for r in dm_rows
         }
 
     @staticmethod
@@ -415,6 +418,23 @@ class PlanningEngine:
 
     # ── Ferienfaktor pro Woche ────────────────────────────────────────────
 
+    def _ferien_faktor_fallback(self, fil_nr: str, bl: str, art: str) -> float:
+        """Fallback ferien factor when no VJ period exists for this ferien type.
+
+        Tries the most recent period of the same art for the same BL, then
+        any other available ferien period for that BL.
+        """
+        candidates = [p for p in self.ferien_plan if p["bundesland"] == bl and p.get("start_vj")]
+        # Prefer same art, then any; sort by start_vj descending (most recent first)
+        same_art = [p for p in candidates if p["art"] == art]
+        ordered = (same_art or candidates)
+        ordered = sorted(ordered, key=lambda p: p["start_vj"], reverse=True)
+        for p in ordered:
+            ff = self._ferien_faktor_woche(fil_nr, p, 1)
+            if ff != 1.0:
+                return ff
+        return 1.0
+
     def _ferien_faktor_woche(self, fil_nr: str, period: dict | None, woche: int) -> float:
         """Lese/berechne Ferienfaktor: Ø Umsatz Ferienwoche / Ø Puffer (Wochentags-gematcht)."""
         if not period:
@@ -448,8 +468,9 @@ class PlanningEngine:
         wk = df[(df["datum"] >= pd.Timestamp(wk_start)) &
                 (df["datum"] <= pd.Timestamp(wk_ende)) & (df["umsatz"] > 0)]
         if wk.empty:
-            self._ferien_cache[key] = 1.0
-            return 1.0
+            # Fallback: use all days in the full VJ ferien period for this weekday mix
+            wk = df[(df["datum"] >= pd.Timestamp(vj_start)) &
+                    (df["datum"] <= pd.Timestamp(vj_ende)) & (df["umsatz"] > 0)]
 
         # Wochentags-gematchtes Verhältnis
         ratios = []
@@ -631,6 +652,11 @@ class PlanningEngine:
             self._datumsmapping.get((_day_iso, bl))
             or self._datumsmapping.get((_day_iso, "alle"))
         )
+        _mapping_art = (
+            self._datumsmapping_art.get((_day_iso, bl))
+            or self._datumsmapping_art.get((_day_iso, "alle"))
+            or "iso_kw"
+        )
         if _mapping_base:
             _base_d = date.fromisoformat(_mapping_base)
         else:
@@ -681,10 +707,23 @@ class PlanningEngine:
                 raw = round(ist_vj * growth, 2)
                 eff_ferien = 0.0
                 direct_ferien = True
+            elif _mapping_art == "ferienabschlag":
+                # Ferienabschlag: base_d is a normal day (no VJ ferien equivalent weekday).
+                # ist_vj = umsatz of that normal base day. Apply ferien factor on top.
+                period = self._ferien_period_for_day(d.isoformat(), bl)
+                if period:
+                    ff = self._ferien_faktor_woche(fil_nr, period, m["ferien_woche"])
+                else:
+                    ff = self._ferien_faktor_fallback(fil_nr, bl, m.get("ferien_art", ""))
+                raw = round(ist_vj * growth * ff, 2)
+                eff_ferien = raw - round(ist_vj * growth, 2)
             else:
                 # Kein VJ-Ferien-Äquivalent für diesen Wochentag → Ferienfaktor anwenden
                 period = self._ferien_period_for_day(d.isoformat(), bl)
-                ff = self._ferien_faktor_woche(fil_nr, period, m["ferien_woche"])
+                if period:
+                    ff = self._ferien_faktor_woche(fil_nr, period, m["ferien_woche"])
+                else:
+                    ff = self._ferien_faktor_fallback(fil_nr, bl, m.get("ferien_art", ""))
                 raw = round(tag_plan * ff, 2)
                 eff_ferien = raw - tag_plan
 

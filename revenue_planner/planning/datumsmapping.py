@@ -39,15 +39,18 @@ def _is_vj_holiday(d: date, bl: str, engine) -> bool:
     )
 
 
-def _ferien_base_day(period: dict, woche: int, wt: int, blocked) -> date:
+def _ferien_base_day(period: dict, woche: int, wt: int, blocked) -> tuple[date, bool]:
     """Pick the base-year reference day for a plan ferien day.
+
+    Returns (base_date, is_ferienabschlag) where is_ferienabschlag=True means
+    no same-weekday ferien day existed in the VJ period and we fell back to the
+    nearest forward non-blocked normal day (Ferienabschlag/-aufschlag logic).
 
     Guarantees the result stays a *ferien* day in the matched VJ period
     (same weekday, nearest week), skipping days that must never be a base
     comparison (public holidays, Dec 24/31). Only if the VJ period contains
-    no usable same-weekday day at all (e.g. the matching weekdays are all
-    Dec 24/31) does it search outward for the nearest non-blocked same
-    weekday — so a ferien day is always compared with a ferien-like day.
+    no usable same-weekday day at all does it search FORWARD first for the
+    nearest non-blocked same weekday after ferien end.
     """
     vj_start = date.fromisoformat(period["start_vj"])
     vj_ende = date.fromisoformat(period["ende_vj"])
@@ -58,19 +61,22 @@ def _ferien_base_day(period: dict, woche: int, wt: int, blocked) -> date:
     in_period = [d for d in _date_range(vj_start, vj_ende)
                  if d.weekday() == wt and not blocked(d)]
     if in_period:
-        return min(in_period, key=lambda d: abs((d - ideal).days))
-    # No usable same-weekday day inside the period (e.g. the only matching
-    # weekdays are Dec 24/31). Step backward first to stay within the base
-    # year / pre-ferien buffer, only then forward.
+        return min(in_period, key=lambda d: abs((d - ideal).days)), False
+    # No usable same-weekday day inside the period — Ferienabschlag case.
+    # Search FORWARD first (nearest normal day after ferien end), then backward.
     for shift in range(1, 60):
-        alt = ideal - timedelta(weeks=shift)
+        alt = vj_ende + timedelta(days=1)
+        days_ahead = (wt - alt.weekday()) % 7
+        alt = alt + timedelta(days=days_ahead) + timedelta(weeks=shift - 1)
         if not blocked(alt):
-            return alt
+            return alt, True
     for shift in range(1, 60):
-        alt = ideal + timedelta(weeks=shift)
+        alt = vj_start - timedelta(days=1)
+        days_back = (alt.weekday() - wt) % 7
+        alt = alt - timedelta(days=days_back) - timedelta(weeks=shift - 1)
         if not blocked(alt):
-            return alt
-    return ideal
+            return alt, True
+    return ideal, True
 
 
 def _safe_date(year: int, month: int, day: int) -> date | None:
@@ -187,7 +193,9 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                             # a public holiday or Dec 24/31.
                             def _blocked(d, _bl=bl):
                                 return _is_vj_holiday(d, _bl, engine) or is_special_quasi_feiertag(d)
-                            base_d = _ferien_base_day(period, woche, wt, _blocked)
+                            base_d, _is_abschlag = _ferien_base_day(period, woche, wt, _blocked)
+                            if _is_abschlag:
+                                mapping_art = "ferienabschlag"
 
                     # 4.5. Feiertagstag override for ferien days:
                     # A day that is in Ferien but also a Feiertagstag uses

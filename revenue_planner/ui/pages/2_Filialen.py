@@ -82,7 +82,7 @@ with tab1:
     ).fillna(0.0)
 
     st.markdown(f"**{len(df)} Filialen** in der Datenbank  "
-                "(Zeilen direkt bearbeiten, neue Zeile unten anhaengen, dann Speichern)")
+                "(Zeilen direkt bearbeiten – Änderungen werden automatisch gespeichert)")
 
     edited = st.data_editor(
         df,
@@ -138,87 +138,78 @@ with tab1:
                 "Bitte Planwert eintragen."
             )
 
-    if st.button("\U0001f4be Speichern", type="primary", key="save_filialen"):
-        db_fil_nrs = set(df["fil_nr"].dropna().astype(str).str.strip())
-        edited_fil_nrs = set(
-            str(r).strip()
-            for r in edited["fil_nr"].dropna()
-            if not _is_empty(str(r))
-        )
-        deleted = db_fil_nrs - edited_fil_nrs
+    # Auto-save: detect changes and save immediately
+    import re as _re
+    db_fil_nrs = set(df["fil_nr"].dropna().astype(str).str.strip())
+    edited_fil_nrs = set(
+        str(r).strip()
+        for r in edited["fil_nr"].dropna()
+        if not _is_empty(str(r))
+    )
+    deleted = db_fil_nrs - edited_fil_nrs
 
-        if deleted and not st.session_state.get("delete_confirmed"):
-            st.session_state["pending_delete"] = list(deleted)
-            st.session_state["pending_edited"] = edited.copy()
-            st.warning(
-                f"Wollen Sie wirklich die Filialen löschen? **{', '.join(sorted(deleted))}**\n"
-                "Alle zugehörigen Planungsdaten werden entfernt."
-            )
-            c_yes, c_no, _ = st.columns([1, 1, 5])
-            if c_yes.button("✅ Ja, löschen", key="confirm_del_yes"):
-                st.session_state["delete_confirmed"] = True
-                st.rerun()
-            if c_no.button("❌ Abbrechen", key="confirm_del_no"):
-                st.session_state.pop("pending_delete", None)
-                st.session_state.pop("pending_edited", None)
-                st.rerun()
-        else:
-            save_df = st.session_state.pop("pending_edited", edited)
-            to_delete = st.session_state.pop("pending_delete", list(deleted))
-            st.session_state.pop("delete_confirmed", None)
+    # Compare DataFrames to detect any change
+    _changed = False
+    try:
+        _df_cmp = df.set_index("fil_nr").sort_index()
+        _ed_cmp = edited[edited["fil_nr"].apply(lambda x: not _is_empty(str(x)))].set_index("fil_nr").sort_index()
+        _df_cmp = _df_cmp[[c for c in _df_cmp.columns if c in _ed_cmp.columns]]
+        _ed_cmp = _ed_cmp[[c for c in _df_cmp.columns]]
+        _changed = not _df_cmp.equals(_ed_cmp) or bool(deleted)
+    except Exception:
+        _changed = True
 
-            saved = 0
-            for _, row in save_df.iterrows():
-                fn = str(row.get("fil_nr", "")).strip()
-                if not fn or _is_empty(fn):
-                    continue
-                bl = str(row.get("bundesland") or "").strip()
-                if not bl:
-                    bl = BUNDESLAENDER[0]
-                bezeichnung = str(row.get("bezeichnung") or "").strip() or None
-                eroeffnung_iso = _to_iso(row.get("eroeffnung"))
-                eroeffnung_ende_iso = _to_iso(row.get("eroeffnung_ende"))
-                kein_wachstum = int(bool(row.get("flag_kein_wachstum")))
-                gum = float(row.get("geplanter_umsatz_monat") or 0)
-                # Auto-gesperrt wenn XX/XXX in Bezeichnung; sonst manueller Wert
-                import re as _re
-                _has_xx = bool(_re.search(r'X{2,}', str(bezeichnung or ""), _re.IGNORECASE))
-                gesperrt = 1 if (_has_xx or bool(row.get("flag_gesperrt"))) else 0
+    if _changed:
+        saved = 0
+        for _, row in edited.iterrows():
+            fn = str(row.get("fil_nr", "")).strip()
+            if not fn or _is_empty(fn):
+                continue
+            bl = str(row.get("bundesland") or "").strip()
+            if not bl:
+                bl = BUNDESLAENDER[0]
+            bezeichnung = str(row.get("bezeichnung") or "").strip() or None
+            eroeffnung_iso = _to_iso(row.get("eroeffnung"))
+            eroeffnung_ende_iso = _to_iso(row.get("eroeffnung_ende"))
+            kein_wachstum = int(bool(row.get("flag_kein_wachstum")))
+            gum = float(row.get("geplanter_umsatz_monat") or 0)
+            _has_xx = bool(_re.search(r'X{2,}', str(bezeichnung or ""), _re.IGNORECASE))
+            gesperrt = 1 if (_has_xx or bool(row.get("flag_gesperrt"))) else 0
 
-                conn.execute("""
-                    INSERT OR REPLACE INTO filialen
-                        (fil_nr, bezeichnung, bundesland, eroeffnung, eroeffnung_ende,
-                         flag_kein_wachstum, flag_gesperrt, geplanter_umsatz_monat)
-                    VALUES (?,?,?,?,?,?,?,?)
-                """, (fn, bezeichnung, bl, eroeffnung_iso, eroeffnung_ende_iso,
-                      kein_wachstum, gesperrt, gum))
+            conn.execute("""
+                INSERT OR REPLACE INTO filialen
+                    (fil_nr, bezeichnung, bundesland, eroeffnung, eroeffnung_ende,
+                     flag_kein_wachstum, flag_gesperrt, geplanter_umsatz_monat)
+                VALUES (?,?,?,?,?,?,?,?)
+            """, (fn, bezeichnung, bl, eroeffnung_iso, eroeffnung_ende_iso,
+                  kein_wachstum, gesperrt, gum))
 
-                if eroeffnung_iso and gum > 0:
-                    try:
-                        eroff_date = date.fromisoformat(eroeffnung_iso)
-                        planjahr = eroff_date.year
-                        for monat in range(1, 13):
-                            planwert = gum * 0.5 if monat == eroff_date.month else gum
-                            if monat < eroff_date.month:
-                                planwert = 0.0
-                            conn.execute("""
-                                INSERT OR REPLACE INTO neue_filialen_plan
-                                    (fil_nr, planjahr, monat, planwert, eroeffnung_datum)
-                                VALUES (?,?,?,?,?)
-                            """, (fn, planjahr, monat, planwert, eroeffnung_iso))
-                    except Exception:
-                        pass
-                saved += 1
+            if eroeffnung_iso and gum > 0:
+                try:
+                    eroff_date = date.fromisoformat(eroeffnung_iso)
+                    planjahr = eroff_date.year
+                    for monat in range(1, 13):
+                        planwert = gum * 0.5 if monat == eroff_date.month else gum
+                        if monat < eroff_date.month:
+                            planwert = 0.0
+                        conn.execute("""
+                            INSERT OR REPLACE INTO neue_filialen_plan
+                                (fil_nr, planjahr, monat, planwert, eroeffnung_datum)
+                            VALUES (?,?,?,?,?)
+                        """, (fn, planjahr, monat, planwert, eroeffnung_iso))
+                except Exception:
+                    pass
+            saved += 1
 
-            for fn in to_delete:
-                conn.execute("DELETE FROM filialen WHERE fil_nr=?", (fn,))
+        for fn in deleted:
+            conn.execute("DELETE FROM filialen WHERE fil_nr=?", (fn,))
 
-            conn.commit()
-            msg = f"✅ Gespeichert: {saved} Filialen."
-            if to_delete:
-                msg += f" Gelöscht: {', '.join(sorted(to_delete))}."
-            st.success(msg)
-            st.rerun()
+        conn.commit()
+        msg = f"✅ {saved} Filialen gespeichert."
+        if deleted:
+            msg += f" Gelöscht: {', '.join(sorted(deleted))}."
+        st.toast(msg)
+        st.rerun()
 
 # ── Tab 2: Bulk import ─────────────────────────────────────────────────────
 with tab2:
