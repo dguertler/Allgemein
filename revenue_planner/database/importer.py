@@ -50,13 +50,17 @@ def import_ist_umsatz(
                              col_map["umsatz"]: "umsatz"})
 
     # Normalise dates → ISO format (try ISO8601 first, fall back to dayfirst for European formats)
-    df["datum"] = pd.to_datetime(df["datum"], format="ISO8601", errors="coerce")
-    still_bad = df["datum"].isna()
+    raw_datum = df["datum"].copy()
+    parsed = pd.to_datetime(raw_datum, format="ISO8601", errors="coerce")
+    still_bad = parsed.isna()
     if still_bad.any():
-        df.loc[still_bad, "datum"] = pd.to_datetime(
-            df.loc[still_bad, df.columns[0]], dayfirst=True, errors="coerce"
+        # Fall back to European day-first parsing on the ORIGINAL strings.
+        # (Bug fixed 06/2026: previously re-parsed the already-coerced NaT
+        # column, silently dropping all German DD.MM.YYYY rows.)
+        parsed.loc[still_bad] = pd.to_datetime(
+            raw_datum.loc[still_bad], dayfirst=True, errors="coerce"
         )
-    df["datum"] = df["datum"].dt.strftime("%Y-%m-%d")
+    df["datum"] = parsed.dt.strftime("%Y-%m-%d")
     bad_dates = df["datum"].isna().sum()
     if bad_dates:
         warnings.append(f"{bad_dates} Zeilen mit ungültigem Datum wurden übersprungen.")
@@ -73,7 +77,20 @@ def import_ist_umsatz(
     df = df[~empty_fil]
 
     # Normalise revenue → float, round to 2 decimal places
-    df["umsatz"] = pd.to_numeric(df["umsatz"].str.replace(",", "."), errors="coerce").round(2)
+    def _parse_num(s: str) -> float:
+        s = str(s).strip().replace('\xa0', '').replace(' ', '')
+        if ',' in s and '.' in s:
+            return pd.to_numeric(s.replace('.', '').replace(',', '.'), errors='coerce')
+        elif ',' in s:
+            return pd.to_numeric(s.replace(',', '.'), errors='coerce')
+        elif '.' in s:
+            parts = s.split('.')
+            if len(parts) > 1 and all(len(p) == 3 for p in parts[1:]):
+                return pd.to_numeric(s.replace('.', ''), errors='coerce')
+            return pd.to_numeric(s, errors='coerce')
+        return pd.to_numeric(s, errors='coerce')
+
+    df["umsatz"] = df["umsatz"].apply(_parse_num).round(2)
     bad_rev = df["umsatz"].isna().sum()
     if bad_rev:
         warnings.append(f"{bad_rev} Zeilen mit ungültigem Umsatz wurden übersprungen.")
@@ -83,8 +100,9 @@ def import_ist_umsatz(
             for r in df[["fil_nr", "datum", "umsatz"]].itertuples()]
 
     cur = conn.cursor()
+    cur.execute("DELETE FROM ist_umsatz")
     cur.executemany(
-        "INSERT OR REPLACE INTO ist_umsatz (fil_nr, datum, umsatz) VALUES (:fil_nr, :datum, :umsatz)",
+        "INSERT INTO ist_umsatz (fil_nr, datum, umsatz) VALUES (:fil_nr, :datum, :umsatz)",
         rows,
     )
     conn.commit()

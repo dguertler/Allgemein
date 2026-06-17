@@ -20,7 +20,13 @@ st.title("Planung ausführen")
 monat_rows = conn.execute(
     "SELECT monat, wachstum_pct FROM parameter_monat WHERE planjahr=?", (planjahr,)
 ).fetchall()
-wachstum_monat = {r["monat"]: r["wachstum_pct"] for r in monat_rows}
+_incr = {r["monat"]: r["wachstum_pct"] for r in monat_rows}
+# Preisanpassung is stored as incremental %; planning engine needs cumulative % per month
+_cumul = 0.0
+wachstum_monat = {}
+for _m in range(1, 13):
+    _cumul += _incr.get(_m, 0.0)
+    wachstum_monat[_m] = _cumul
 
 # Basiszeitraum: full previous year when planjahr <= current year, rolling 12 months otherwise
 today = date.today()
@@ -85,6 +91,13 @@ if st.session_state.get("_do_plan"):
         try:
             engine = PlanningEngine(conn, params)
             results = engine.run(selected_fils)
+            # Clear ALL planning data for this year before saving — ensures
+            # the table never contains stale results from previous partial runs
+            conn.execute(
+                "DELETE FROM planung WHERE CAST(strftime('%Y', datum) AS INTEGER)=?",
+                (planjahr,)
+            )
+            conn.commit()
             engine.save(results)
             st.success(f"✅ {len(selected_fils)} Filiale(n) — {len(results):,} Tage berechnet.")
             st.session_state["last_plan_results"] = results
@@ -100,15 +113,43 @@ def _de(val) -> str:
     return f"{float(val):,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-if "last_plan_results" in st.session_state and st.session_state.get("last_plan_jahr") == planjahr:
-    results = st.session_state["last_plan_results"]
+def _load_plan_df_from_db(conn_db, plan_yr: int) -> pd.DataFrame | None:
+    """Load plan summary from DB for the given year. Returns None if no data."""
+    rows = conn_db.execute(
+        "SELECT fil_nr, datum, ist_vj, budget FROM planung "
+        "WHERE CAST(strftime('%Y', datum) AS INTEGER)=?",
+        (plan_yr,),
+    ).fetchall()
+    if not rows:
+        return None
+    return pd.DataFrame([{
+        "fil_nr": r["fil_nr"],
+        "monat": int(r["datum"][5:7]),
+        "budget": float(r["budget"] or 0),
+        "ist_vj": float(r["ist_vj"] or 0),
+    } for r in rows])
+
+
+# Decide data source: fresh calculation > existing DB data
+_use_fresh = ("last_plan_results" in st.session_state
+              and st.session_state.get("last_plan_jahr") == planjahr)
+_db_df = None if _use_fresh else _load_plan_df_from_db(conn, planjahr)
+
+if _use_fresh or _db_df is not None:
+    if _use_fresh:
+        results = st.session_state["last_plan_results"]
+        df = pd.DataFrame([
+            {"fil_nr": r.fil_nr, "monat": r.datum.month, "budget": r.budget, "ist_vj": r.ist_vj}
+            for r in results
+        ])
+    else:
+        df = _db_df
+        results = None
+
     st.divider()
     st.subheader("Ergebnisvorschau — Monatsübersicht")
-
-    df = pd.DataFrame([
-        {"fil_nr": r.fil_nr, "monat": r.datum.month, "budget": r.budget, "ist_vj": r.ist_vj}
-        for r in results
-    ])
+    if not _use_fresh:
+        st.caption(f"Gespeicherte Planung aus der Datenbank ({existing_n:,} Tage)")
 
     budget_m = df.groupby(["fil_nr", "monat"])["budget"].sum().unstack(fill_value=0)
     ist_m    = df.groupby(["fil_nr", "monat"])["ist_vj"].sum().unstack(fill_value=0)
@@ -200,16 +241,17 @@ if "last_plan_results" in st.session_state and st.session_state.get("last_plan_j
         },
     )
 
-    st.divider()
-    with st.spinner("Excel wird erstellt…"):
-        excel_bytes = build_excel(results, gmbh, planjahr)
-    st.download_button(
-        label="📥 Excel-Planung herunterladen",
-        data=excel_bytes,
-        file_name=f"Umsatzplanung_{planjahr}_{gmbh.replace(' ', '_')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary",
-    )
+    if _use_fresh and results is not None:
+        st.divider()
+        with st.spinner("Excel wird erstellt…"):
+            excel_bytes = build_excel(results, gmbh, planjahr)
+        st.download_button(
+            label="📥 Excel-Planung herunterladen",
+            data=excel_bytes,
+            file_name=f"Umsatzplanung_{planjahr}_{gmbh.replace(' ', '_')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+        )
 
 st.divider()
 existing_plan = conn.execute(

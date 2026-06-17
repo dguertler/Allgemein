@@ -8,6 +8,27 @@ from ui.session import get_conn, get_gmbh, require_db
 import pandas as pd
 from datetime import date
 
+BL_NAME_TO_ABBR = {
+    "Brandenburg": "BB", "Berlin": "BE", "Baden-Württemberg": "BW",
+    "Bayern": "BY", "Bremen": "HB", "Hessen": "HE", "Hamburg": "HH",
+    "Mecklenburg-Vorpommern": "MV", "Niedersachsen": "NI", "Nordrhein-Westfalen": "NW",
+    "Rheinland-Pfalz": "RP", "Schleswig-Holstein": "SH", "Saarland": "SL",
+    "Sachsen": "SN", "Sachsen-Anhalt": "ST", "Thüringen": "TH",
+}
+
+
+def _normalize_bl_import(val: str) -> str:
+    """Accept both '2-letter', 'DE-XX' and long name; always return 2-letter abbreviation."""
+    v = str(val or "").strip()
+    v_up = v.upper().replace("DE-", "")
+    if v_up in {b.upper() for b in ["BB","BE","BW","BY","HB","HE","HH","MV","NI","NW","RP","SH","SL","SN","ST","TH"]}:
+        return v_up
+    # Try long-name lookup (case-insensitive)
+    for full, abbr in BL_NAME_TO_ABBR.items():
+        if full.lower() == v.lower():
+            return abbr
+    return v_up  # return as-is (will fail validation later)
+
 require_db()
 conn = get_conn()
 st.title("Filialverwaltung")
@@ -38,7 +59,7 @@ tab1, tab2 = st.tabs(["Filialen", "Massenimport"])
 # ── Tab 1: Inline editable table ──────────────────────────────────────────
 with tab1:
     cols_needed = ["fil_nr", "bezeichnung", "bundesland", "eroeffnung_ende",
-                   "flag_kein_wachstum", "eroeffnung", "geplanter_umsatz_monat"]
+                   "flag_kein_wachstum", "flag_gesperrt", "eroeffnung", "geplanter_umsatz_monat"]
     existing_cols = [r[1] for r in conn.execute("PRAGMA table_info(filialen)").fetchall()]
     select_cols = [c for c in cols_needed if c in existing_cols]
     df = pd.read_sql(
@@ -51,6 +72,11 @@ with tab1:
     for col in ["eroeffnung", "eroeffnung_ende"]:
         df[col] = pd.to_datetime(df[col], errors="coerce")
     df["flag_kein_wachstum"] = df["flag_kein_wachstum"].fillna(0).astype(bool)
+    df["flag_gesperrt"] = df["flag_gesperrt"].fillna(0).astype(bool)
+    # Auto-detect XX/XXX in bezeichnung → vorschlagsweise gesperrt
+    import re as _re
+    _xx_mask = df["bezeichnung"].fillna("").apply(lambda b: bool(_re.search(r'X{2,}', str(b), _re.IGNORECASE)))
+    df.loc[_xx_mask, "flag_gesperrt"] = True
     df["geplanter_umsatz_monat"] = pd.to_numeric(
         df["geplanter_umsatz_monat"], errors="coerce"
     ).fillna(0.0)
@@ -72,6 +98,11 @@ with tab1:
             "flag_kein_wachstum": st.column_config.CheckboxColumn(
                 "Kein Wachstum", width=105
             ),
+            "flag_gesperrt": st.column_config.CheckboxColumn(
+                "Gesperrt", width=80,
+                help="Gesperrte Filialen werden bei Planung und Auswertung ignoriert. "
+                     "Wird automatisch gesetzt wenn XX oder XXX in der Bezeichnung steht."
+            ),
             "eroeffnung": st.column_config.DateColumn(
                 "Eröffnung", format="DD.MM.YYYY", width=100
             ),
@@ -83,8 +114,8 @@ with tab1:
             ),
         },
         column_order=[
-            "fil_nr", "bezeichnung", "bundesland", "eroeffnung_ende",
-            "flag_kein_wachstum", "eroeffnung", "geplanter_umsatz_monat",
+            "fil_nr", "bezeichnung", "bundesland", "flag_gesperrt",
+            "eroeffnung_ende", "flag_kein_wachstum", "eroeffnung", "geplanter_umsatz_monat",
         ],
         num_rows="dynamic",
         use_container_width=True,
@@ -149,14 +180,18 @@ with tab1:
                 eroeffnung_ende_iso = _to_iso(row.get("eroeffnung_ende"))
                 kein_wachstum = int(bool(row.get("flag_kein_wachstum")))
                 gum = float(row.get("geplanter_umsatz_monat") or 0)
+                # Auto-gesperrt wenn XX/XXX in Bezeichnung; sonst manueller Wert
+                import re as _re
+                _has_xx = bool(_re.search(r'X{2,}', str(bezeichnung or ""), _re.IGNORECASE))
+                gesperrt = 1 if (_has_xx or bool(row.get("flag_gesperrt"))) else 0
 
                 conn.execute("""
                     INSERT OR REPLACE INTO filialen
                         (fil_nr, bezeichnung, bundesland, eroeffnung, eroeffnung_ende,
-                         flag_kein_wachstum, geplanter_umsatz_monat)
-                    VALUES (?,?,?,?,?,?,?)
+                         flag_kein_wachstum, flag_gesperrt, geplanter_umsatz_monat)
+                    VALUES (?,?,?,?,?,?,?,?)
                 """, (fn, bezeichnung, bl, eroeffnung_iso, eroeffnung_ende_iso,
-                      kein_wachstum, gum))
+                      kein_wachstum, gesperrt, gum))
 
                 if eroeffnung_iso and gum > 0:
                     try:
@@ -279,8 +314,8 @@ with tab2:
 
                 preview = pd.DataFrame()
                 preview["Filialnummer"] = imp[map_fil_nr].str.strip()
-                preview["Bundesland"] = (
-                    imp[map_bundesland].str.strip().str.upper().str.replace("DE-", "", regex=False)
+                preview["Bundesland"] = imp[map_bundesland].apply(
+                    lambda x: _normalize_bl_import(str(x))
                 )
                 if map_bezeichnung != NONE_OPTION:
                     preview["Bezeichnung"] = imp[map_bezeichnung]
@@ -302,7 +337,7 @@ with tab2:
 
                     for idx, row in preview.iterrows():
                         fn = str(row.get("Filialnummer", "")).strip()
-                        bl = str(row.get("Bundesland", "")).strip().upper().replace("DE-", "")
+                        bl = _normalize_bl_import(str(row.get("Bundesland", "")))
 
                         if _is_empty(fn):
                             skipped.append({"Zeile": idx + 2, "Grund": "Filialnummer fehlt",

@@ -4,14 +4,14 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from ui.session import get_conn, get_gmbh, require_db
+from ui.session import get_conn, get_gmbh, require_db, get_budgetjahr
 import pandas as pd
-from datetime import date
 
 require_db()
 conn = get_conn()
+planjahr = get_budgetjahr()
 st.title("Preisanpassung je Monat (%)")
-st.caption(f"Firma: **{get_gmbh()}**")
+st.caption(f"Firma: **{get_gmbh()}** · Budgetjahr: **{planjahr}**")
 
 st.markdown("""
 Trage hier die geplante **Preisanpassung je Monat** in % ein
@@ -19,9 +19,6 @@ Trage hier die geplante **Preisanpassung je Monat** in % ein
 Diese Werte werden als Wachstumsfaktor in der Planung berücksichtigt.  
 0 % = kein Preiseffekt in diesem Monat.
 """)
-
-planjahr = st.number_input("Planjahr", min_value=2024, max_value=2035,
-                            value=date.today().year + 1, step=1)
 
 monat_rows = conn.execute(
     "SELECT monat, wachstum_pct FROM parameter_monat WHERE planjahr=?", (planjahr,)
@@ -50,17 +47,20 @@ for v in vals:
     s += v
     cumul.append(round(s, 1))
 st.dataframe(
-    pd.DataFrame([{m: f"{c:+.1f} %" for m, c in zip(MONATE, cumul)}], index=["Kumuliert"]),
+    pd.DataFrame([{m: f"{c:.1f} %" for m, c in zip(MONATE, cumul)}], index=["Kumuliert"]),
     use_container_width=True,
 )
 
-if st.button("\U0001f4be Preisanpassungen speichern", type="primary"):
+_initial_df = pd.DataFrame([initial])
+_edited_vals = [float(edited[m].iloc[0]) for m in MONATE]
+_initial_vals = [float(_initial_df[m].iloc[0]) for m in MONATE]
+if _edited_vals != _initial_vals:
     for i, m in enumerate(MONATE):
         conn.execute("""
             INSERT INTO parameter_monat (planjahr, monat, wachstum_pct)
             VALUES (?,?,?)
             ON CONFLICT(planjahr, monat) DO UPDATE SET wachstum_pct=excluded.wachstum_pct
-        """, (planjahr, i + 1, float(edited[m].iloc[0])))
+        """, (planjahr, i + 1, _edited_vals[i]))
     conn.commit()
-    st.success("✅ Gespeichert.")
+    st.toast("✅ Preisanpassungen gespeichert.")
     st.rerun()

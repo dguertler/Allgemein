@@ -51,54 +51,11 @@ with tabs[0]:
             st.rerun()
 
     st.divider()
-    st.subheader("Umsatzwachstum je Monat (%)")
-    st.caption("Wachstumsrate gegenüber Vorjahr je Monat. 0 % = kein Wachstum in diesem Monat.")
-
-    MONATE = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
-              "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
-
-    monat_rows = conn.execute(
-        "SELECT monat, wachstum_pct FROM parameter_monat WHERE planjahr=?", (planjahr,)
-    ).fetchall()
-    existing_pct = {r["monat"]: r["wachstum_pct"] for r in monat_rows}
-    default_pct = float(ex.get("preiserhoehung_pct", 0.0))
-    initial = {m: existing_pct.get(i + 1, default_pct) for i, m in enumerate(MONATE)}
-
-    edited = st.data_editor(
-        pd.DataFrame([initial]),
-        column_config={
-            m: st.column_config.NumberColumn(
-                m, min_value=-20.0, max_value=50.0, step=0.1, format="%.1f"
-            ) for m in MONATE
-        },
-        use_container_width=True,
-        hide_index=True,
-        key=f"wachstum_editor_{planjahr}",
+    st.info(
+        "Das monatliche Umsatzwachstum (%) wird auf der Seite "
+        "**Preisanpassung je Monat** gepflegt (eine Quelle der Wahrheit für "
+        "`parameter_monat.wachstum_pct`)."
     )
-
-    vals = [float(edited[m].iloc[0]) for m in MONATE]
-    cumul, s = [], 0.0
-    for v in vals:
-        s += v
-        cumul.append(round(s, 1))
-    st.dataframe(
-        pd.DataFrame(
-            [{m: f"{c:+.1f} %" for m, c in zip(MONATE, cumul)}],
-            index=["Kumuliert"],
-        ),
-        use_container_width=True,
-    )
-
-    if st.button("💾 Wachstumsraten speichern", key="save_monat_wachstum"):
-        for i, m in enumerate(MONATE):
-            conn.execute("""
-                INSERT INTO parameter_monat (planjahr, monat, wachstum_pct)
-                VALUES (?,?,?)
-                ON CONFLICT(planjahr, monat) DO UPDATE SET wachstum_pct=excluded.wachstum_pct
-            """, (planjahr, i + 1, float(edited[m].iloc[0])))
-        conn.commit()
-        st.success("✅ Wachstumsraten gespeichert.")
-        st.rerun()
 
 # ── Tab 2: Holidays ────────────────────────────────────────────────────────
 with tabs[1]:

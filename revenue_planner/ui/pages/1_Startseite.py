@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from ui.session import DATA_DIR, open_db, get_gmbh, get_budgetjahr, set_budgetjahr
+from ui.session import DATA_DIR, open_db, get_conn, get_gmbh, get_budgetjahr, set_budgetjahr
 from datetime import date
 
 st.title("Startseite")
@@ -37,23 +37,54 @@ with col2:
 if get_gmbh():
     st.divider()
     st.success(f"Aktive Firma: **{get_gmbh()}**")
+    conn = get_conn()
 
-    st.subheader("Budgetjahr")
-    bj = st.number_input(
-        "Budgetjahr auswählen",
-        min_value=2024,
-        max_value=2040,
-        value=get_budgetjahr(),
-        step=1,
-        key="budgetjahr_input",
-        help="Das Budgetjahr bestimmt, für welches Jahr geplant wird. Standard: nächstes Jahr.",
-    )
-    if int(bj) != get_budgetjahr():
-        set_budgetjahr(int(bj))
-        st.rerun()
+    # Budgetjahr auf linker Hälfte begrenzen
+    bj_col, _ = st.columns(2)
+    with bj_col:
+        st.subheader("Budgetjahr")
 
-    st.info(
-        f"Aktives Budgetjahr: **{get_budgetjahr()}** — alle Berechnungen, "
-        "Feiertage und Exporte beziehen sich auf dieses Jahr."
-    )
+        years_in_db: list[int] = [
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT planjahr FROM parameter ORDER BY planjahr DESC"
+            ).fetchall()
+        ]
+
+        if years_in_db:
+            current_bj = get_budgetjahr()
+            opts = sorted(set(years_in_db), reverse=True)
+            if current_bj not in opts:
+                set_budgetjahr(opts[0])
+                current_bj = opts[0]
+            sel = st.selectbox(
+                "Budgetjahr auswählen",
+                options=opts,
+                index=opts.index(current_bj),
+                key="bj_select",
+            )
+            if int(sel) != current_bj:
+                set_budgetjahr(int(sel))
+                st.rerun()
+            st.info(
+                f"Aktives Budgetjahr: **{get_budgetjahr()}** — alle Berechnungen, "
+                "Feiertage und Exporte beziehen sich auf dieses Jahr."
+            )
+        else:
+            st.warning("Noch kein Budgetjahr angelegt. Bitte unten ein Budgetjahr erstellen.")
+
+        with st.expander("➕ Neues Budgetjahr anlegen", expanded=not bool(years_in_db)):
+            new_year = st.number_input(
+                "Jahr", min_value=2024, max_value=2040,
+                value=date.today().year + 1,
+                step=1, key="new_bj_input",
+            )
+            if st.button("Budgetjahr anlegen", key="new_bj_btn"):
+                conn.execute(
+                    "INSERT OR IGNORE INTO parameter (planjahr) VALUES (?)", (int(new_year),)
+                )
+                conn.commit()
+                set_budgetjahr(int(new_year))
+                st.success(f"✅ Budgetjahr **{int(new_year)}** angelegt und ausgewählt.")
+                st.rerun()
+
     st.caption("Weiter mit der Navigation links.")

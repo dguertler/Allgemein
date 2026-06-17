@@ -11,6 +11,7 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
+    menu_items={},
 )
 
 ASSETS = BASE / "ui" / "assets"
@@ -31,7 +32,7 @@ def _logo_tag(path: Path, width: int = 65) -> str:
     )
 
 
-def _combined_logo_bytes(paths: list, height: int = 44) -> bytes | None:
+def _combined_logo_bytes(paths: list, height: int = 88) -> bytes | None:
     """Build a combined PNG for st.logo() – plain white background, no transparency."""
     try:
         from PIL import Image
@@ -68,11 +69,30 @@ if _logo_bytes:
     st.logo(_logo_bytes, size="large")
     st.markdown("""
 <style>
+/* Logo-Bereich: margin-top auf dem Header selbst (padding-top wird von Streamlit überschrieben) */
+[data-testid="stSidebarHeader"] {
+    margin-top: 1rem !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+    padding-bottom: 0.5rem !important;
+    padding-top: 0 !important;
+}
 [data-testid="stSidebarHeader"] img {
+    height: 80px !important;
+    width: auto !important;
+    max-width: 100% !important;
     background: #ffffff !important;
     padding: 4px 6px !important;
     border-radius: 5px !important;
     object-fit: contain !important;
+    display: block !important;
+    margin: 0 !important;
+}
+/* Sidebar-Einklapp-Button ausblenden */
+[data-testid="stSidebarCollapseButton"],
+button[aria-label="Close sidebar"],
+button[aria-label="Collapse sidebar"] {
+    display: none !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -88,6 +108,44 @@ else:
             )
             st.divider()
 
+# ── Sidebar: Firma / Budgetjahr / Basiszeitraum ────────────────────────────
+from ui.session import get_gmbh as _get_gmbh, get_budgetjahr as _get_bj
+
+_gmbh = _get_gmbh()
+_bj   = _get_bj()
+
+# Auto-correct budgetjahr: if the stored year doesn't exist in DB, pick the newest existing
+if _gmbh:
+    from ui.session import get_conn as _get_conn, set_budgetjahr as _set_bj_app
+    _conn_app = _get_conn()
+    if _conn_app:
+        _yrs = [r[0] for r in _conn_app.execute(
+            "SELECT DISTINCT planjahr FROM parameter ORDER BY planjahr DESC"
+        ).fetchall()]
+        if _yrs and _bj not in _yrs:
+            _set_bj_app(_yrs[0])
+            _bj = _yrs[0]
+
+with st.sidebar:
+    if _gmbh:
+        from datetime import date as _date, timedelta as _td
+        _stichtag = _date(_bj, 1, 1) if _bj <= _date.today().year else _date.today()
+        _lc = _stichtag.replace(day=1) - _td(days=1)
+        _m, _y = _lc.month, _lc.year
+        _ms = _m - 11
+        _ys = _y
+        while _ms <= 0:
+            _ms += 12
+            _ys -= 1
+        _mon = ["Jan","Feb","Mär","Apr","Mai","Jun","Jul","Aug","Sep","Okt","Nov","Dez"]
+        _basis_label = f"{_mon[_ms-1]} {_ys} – {_mon[_m-1]} {_y}"
+        st.markdown(
+            f"**Firma:** {_gmbh}  \n"
+            f"**Budgetjahr:** {_bj}  \n"
+            f"**Basiszeitraum:** {_basis_label}"
+        )
+        st.divider()
+
 # ── Navigation ─────────────────────────────────────────────────────────────
 pages = st.navigation({
     " ": [
@@ -99,16 +157,20 @@ pages = st.navigation({
                 title="Filialen",               icon=":material/store:"),
         st.Page(str(BASE / "ui/pages/3_Daten_Import.py"),
                 title="Umsatz-Import",           icon=":material/upload_file:"),
-        st.Page(str(BASE / "ui/pages/8_Feiertage_Import.py"),
-                title="Feiertage laden",         icon=":material/event:"),
         st.Page(str(BASE / "ui/pages/9_Oeffnungstage.py"),
-                title="Öffnungstage",           icon=":material/calendar_month:"),
+                title="Filial-Öffnungstage",    icon=":material/calendar_month:"),
+        st.Page(str(BASE / "ui/pages/8_Feiertage_Import.py"),
+                title="Feiertage u. Ferien",    icon=":material/event:"),
         st.Page(str(BASE / "ui/pages/12_Schulfilialen.py"),
                 title="Schulfilialen",           icon=":material/school:"),
+        st.Page(str(BASE / "ui/pages/13_Datumsmapping.py"),
+                title="Datumsmapping",           icon=":material/calendar_view_day:"),
         st.Page(str(BASE / "ui/pages/11_Preisanpassung.py"),
                 title="Preisanpassung je Monat", icon=":material/trending_up:"),
     ],
     "Berechnung & Validierung": [
+        st.Page(str(BASE / "ui/pages/14_Validierung.py"),
+                title="Plausibilitätsprüfung", icon=":material/checklist:"),
         st.Page(str(BASE / "ui/pages/6_Planung.py"),
                 title="Planung ausführen",   icon=":material/calculate:"),
         st.Page(str(BASE / "ui/pages/10_Herleitung.py"),
