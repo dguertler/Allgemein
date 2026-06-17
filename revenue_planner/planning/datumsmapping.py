@@ -42,7 +42,7 @@ def _is_vj_holiday(d: date, bl: str, engine) -> bool:
 def _ferien_base_day(period: dict, woche: int, wt: int, blocked) -> tuple[date, bool]:
     """Pick the base-year reference day for a plan ferien day.
 
-    Returns (base_date, is_ferienabschlag) where is_ferienabschlag=True means
+    Returns (base_date, is_Ferienabschlag) where is_Ferienabschlag=True means
     no same-weekday ferien day existed in the VJ period and we fell back to the
     nearest forward non-blocked normal day (Ferienabschlag/-aufschlag logic).
 
@@ -195,7 +195,7 @@ def generate_datumsmapping(conn: sqlite3.Connection, planjahr: int, engine) -> i
                                 return _is_vj_holiday(d, _bl, engine) or is_special_quasi_feiertag(d)
                             base_d, _is_abschlag = _ferien_base_day(period, woche, wt, _blocked)
                             if _is_abschlag:
-                                mapping_art = "ferienabschlag"
+                                mapping_art = "Ferienabschlag"
 
                     # 4.5. Feiertagstag override for ferien days:
                     # A day that is in Ferien but also a Feiertagstag uses

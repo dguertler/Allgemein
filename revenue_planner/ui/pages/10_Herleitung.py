@@ -60,6 +60,22 @@ _dm_rows = conn.execute(
 _dm_lookup = {(r["plan_datum"], r["bundesland"]): r["base_datum"] for r in _dm_rows}
 _dm_typ_lookup = {(r["plan_datum"], r["bundesland"]): r["plan_typ"] for r in _dm_rows}
 
+# IST Basis live: ist_vj 1:1 aus Datumsmapping + ist_umsatz ersetzen (vor Aggregation,
+# damit alle Aggregationsstufen den richtigen Basistag-Umsatz verwenden).
+_base_ist_all = {
+    (str(r["fil_nr"]), r["datum"]): r["umsatz"]
+    for r in conn.execute("SELECT fil_nr, datum, umsatz FROM ist_umsatz").fetchall()
+}
+def _live_ist_vj(row) -> float:
+    iso = row["_iso"]
+    bl = _nbl_hrl(str(row.get("bundesland", "") or ""))
+    base_d = _dm_lookup.get((iso, bl)) or _dm_lookup.get((iso, "alle")) or ""
+    if not base_d:
+        return float(row["ist_vj"])
+    val = _base_ist_all.get((str(row["fil_nr"]), base_d))
+    return float(val) if val is not None else float(row["ist_vj"])
+df_all["ist_vj"] = df_all.apply(_live_ist_vj, axis=1)
+
 def _base_datum_for(row) -> str:
     iso = row["datum"].strftime("%Y-%m-%d")
     bl = str(row.get("bundesland", "") or "")
@@ -287,21 +303,6 @@ if zeit_ebene == "Tag":
     _ferien_rows = agg["_daytype"] == "ferien"
     agg.loc[_ferien_rows, "eff_ferien"] = None
 
-    # IST Basis: direkt aus ist_umsatz per base_datum nachschlagen (statt gespeichertem ist_vj).
-    # So stimmt der Wert auch dann, wenn die Planung älter ist als das Datumsmapping.
-    if entity_ebene == "Filiale":
-        _base_ist_all = {
-            (str(r["fil_nr"]), r["datum"]): r["umsatz"]
-            for r in conn.execute("SELECT fil_nr, datum, umsatz FROM ist_umsatz").fetchall()
-        }
-        def _ist_basis_live(row):
-            iso = _row_iso(row)
-            bl = _row_bl(row)
-            base_d = _dm_lookup.get((iso, bl)) or _dm_lookup.get((iso, "alle")) or ""
-            if not base_d:
-                return row.get("ist_vj", 0.0)
-            return _base_ist_all.get((str(row["fil_nr"]), base_d), row.get("ist_vj", 0.0))
-        agg["ist_vj"] = agg.apply(_ist_basis_live, axis=1)
 
 # IST aktuell vs. Budget — nur bis zum letzten importierten Tag
 agg["Abw. €"] = agg.apply(

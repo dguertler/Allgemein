@@ -707,7 +707,7 @@ class PlanningEngine:
                 raw = round(ist_vj * growth, 2)
                 eff_ferien = 0.0
                 direct_ferien = True
-            elif _mapping_art == "ferienabschlag":
+            elif _mapping_art == "Ferienabschlag":
                 # Ferienabschlag: base_d is a normal day (no VJ ferien equivalent weekday).
                 # ist_vj = umsatz of that normal base day. Apply ferien factor on top.
                 period = self._ferien_period_for_day(d.isoformat(), bl)
