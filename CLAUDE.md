@@ -7,7 +7,6 @@
 > 1. Relevante Docs aktualisieren (neue Erkenntnisse, TODOs, Architekturentscheidungen)
 > 2. Alle Änderungen committen und auf `master` pushen
 > 3. Dem Nutzer eine Zusammenfassung ausgeben (was geändert, welche Dateien, offene Punkte)
-> 4. **Download-Link ausgeben:** `https://github.com/dguertler/Allgemein/archive/refs/heads/master.zip`
 
 ---
 
