@@ -12,17 +12,23 @@ import io as _io
 
 
 def _read_csv_robust(file_obj, **kwargs) -> pd.DataFrame:
-    """Read CSV trying common encodings (utf-8, cp1252, latin-1, utf-8-sig)."""
+    """Read CSV trying explicit separators (;, ,) before auto-detection, across common encodings."""
     data = file_obj.read()
     file_obj.seek(0)
     for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1", "iso-8859-1"):
-        try:
-            return pd.read_csv(
-                _io.BytesIO(data), dtype=str, sep=None, engine="python",
-                encoding=enc, **kwargs
-            )
-        except (UnicodeDecodeError, Exception):
-            continue
+        for sep in (";", ",", None):
+            try:
+                kw = {"dtype": str, "encoding": enc, **kwargs}
+                if sep is None:
+                    kw["sep"] = None
+                    kw["engine"] = "python"
+                else:
+                    kw["sep"] = sep
+                df = pd.read_csv(_io.BytesIO(data), **kw)
+                if len(df.columns) >= 3:
+                    return df
+            except (UnicodeDecodeError, Exception):
+                continue
     raise ValueError(
         "CSV-Datei konnte mit keiner bekannten Zeichenkodierung gelesen werden "
         "(UTF-8, Windows-1252, Latin-1). Bitte als Excel (.xlsx) exportieren."

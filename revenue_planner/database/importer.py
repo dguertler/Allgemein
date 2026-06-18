@@ -87,15 +87,26 @@ def import_ist_umsatz(
     else:
         raw = data.read() if hasattr(data, "read") else open(str(data), "rb").read()
         _loaded = False
+        # Try explicit separators first (avoids sniffer misidentifying comma-decimal as delimiter),
+        # then fall back to auto-detection.
         for _enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1", "iso-8859-1"):
-            try:
-                df = pd.read_csv(
-                    io.BytesIO(raw), dtype=str, sep=None, engine="python", encoding=_enc
-                )
-                _loaded = True
+            for _sep in (";", ",", None):
+                try:
+                    _kwargs = {"dtype": str, "encoding": _enc}
+                    if _sep is None:
+                        _kwargs["sep"] = None
+                        _kwargs["engine"] = "python"
+                    else:
+                        _kwargs["sep"] = _sep
+                    _df_try = pd.read_csv(io.BytesIO(raw), **_kwargs)
+                    if len(_df_try.columns) >= 3:
+                        df = _df_try
+                        _loaded = True
+                        break
+                except (UnicodeDecodeError, Exception):
+                    continue
+            if _loaded:
                 break
-            except (UnicodeDecodeError, Exception):
-                continue
         if not _loaded:
             raise ValueError(
                 "CSV-Datei konnte mit keiner bekannten Zeichenkodierung gelesen werden "
