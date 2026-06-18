@@ -15,113 +15,139 @@ planjahr = get_budgetjahr()
 
 st.title("Herleitung der Budgetberechnung")
 
-df_all = pd.read_sql(
-    "SELECT * FROM planung WHERE CAST(strftime('%Y', datum) AS INTEGER)=?",
-    conn, params=(planjahr,),
-)
+# ── Daten laden (gecacht in session_state je GmbH + Planjahr) ──────────────
+_cache_key = f"herleitung_data_{gmbh}_{planjahr}"
 
-if df_all.empty:
-    st.info(
-        f"Noch keine Planungsdaten für {planjahr} vorhanden. "
-        "Bitte zuerst unter **Planung ausführen** eine Berechnung starten."
-    )
+_col_reload, _col_hint = st.columns([1, 6])
+if _col_reload.button("🔄 Neu laden", key="herleitung_reload"):
+    st.session_state.pop(_cache_key, None)
+
+if _cache_key not in st.session_state:
+    _n_check = conn.execute(
+        "SELECT COUNT(*) FROM planung WHERE CAST(strftime('%Y', datum) AS INTEGER)=?",
+        (planjahr,),
+    ).fetchone()[0]
+    if _n_check == 0:
+        st.info(
+            f"Noch keine Planungsdaten für {planjahr} vorhanden. "
+            "Bitte zuerst unter **Planung ausführen** eine Berechnung starten."
+        )
+        st.stop()
+
+    with st.spinner("Planungsdaten werden geladen…"):
+        _df_raw = pd.read_sql(
+            "SELECT fil_nr, datum, bundesland, wochentag, ist_vj, "
+            "eff_oeffnung, eff_wochentag, eff_preis, eff_ferien, eff_feiertag, "
+            "eff_norm, eff_verteilung, budget, tagestyp, feiertag_name, ferien_art "
+            "FROM planung WHERE CAST(strftime('%Y', datum) AS INTEGER)=?",
+            conn, params=(planjahr,),
+        )
+
+        # Numerische Spalten normalisieren
+        eff_cols = ["ist_vj", "eff_oeffnung", "eff_wochentag",
+                    "eff_preis", "eff_ferien", "eff_feiertag", "budget"]
+        for col in eff_cols + ["eff_norm", "eff_verteilung"]:
+            if col not in _df_raw.columns:
+                _df_raw[col] = 0.0
+            _df_raw[col] = pd.to_numeric(_df_raw[col], errors="coerce").fillna(0.0)
+
+        if "budget" not in _df_raw.columns or _df_raw["budget"].sum() == 0:
+            for alt in ["gesamt_plan", "tagesumsatz_plan"]:
+                if alt in _df_raw.columns:
+                    _df_raw["budget"] = pd.to_numeric(_df_raw[alt], errors="coerce").fillna(0.0)
+                    break
+
+        # fil_nr immer als str normieren
+        _df_raw["fil_nr"] = _df_raw["fil_nr"].astype(str).str.strip()
+
+        _df_raw["datum"] = pd.to_datetime(_df_raw["datum"])
+        _df_raw["_iso"] = _df_raw["datum"].dt.strftime("%Y-%m-%d")
+
+        for col in ["tagestyp", "feiertag_name", "ferien_art", "bundesland"]:
+            if col not in _df_raw.columns:
+                _df_raw[col] = ""
+            _df_raw[col] = _df_raw[col].fillna("")
+
+        # Bundesland aus filialen-Tabelle ergänzen falls leer
+        if _df_raw["bundesland"].eq("").any():
+            _bl_map = {str(r[0]): r[1] for r in conn.execute(
+                "SELECT fil_nr, bundesland FROM filialen").fetchall()}
+            _mask = _df_raw["bundesland"].eq("")
+            _df_raw.loc[_mask, "bundesland"] = _df_raw.loc[_mask, "fil_nr"].map(_bl_map).fillna("?")
+
+        # IST-Umsätze des Budgetjahrs: Lookup-Dict statt Merge
+        _ist_rows = conn.execute(
+            "SELECT fil_nr, datum, umsatz FROM ist_umsatz WHERE datum LIKE ?",
+            (f"{planjahr}-%",),
+        ).fetchall()
+        _ist_lookup = {(str(r["fil_nr"]).strip(), r["datum"]): float(r["umsatz"])
+                       for r in _ist_rows}
+        _last_ist_date = max((r["datum"] for r in _ist_rows), default="")
+
+        if _ist_lookup:
+            _df_raw["_key"] = _df_raw["fil_nr"] + "||" + _df_raw["_iso"]
+            _lookup_flat = {f"{k[0]}||{k[1]}": v for k, v in _ist_lookup.items()}
+            _df_raw["ist_aktuell"] = _df_raw["_key"].map(_lookup_flat)
+            _df_raw.drop(columns=["_key"], inplace=True)
+        else:
+            _df_raw["ist_aktuell"] = None
+
+        # Datumsmapping für Tag-View (Basisdatum + Tagestyp)
+        _dm_rows = conn.execute(
+            "SELECT plan_datum, base_datum, bundesland, plan_typ FROM datumsmapping "
+            "WHERE CAST(strftime('%Y', plan_datum) AS INTEGER)=?",
+            (planjahr,),
+        ).fetchall()
+        _dm_lookup = {(r["plan_datum"], r["bundesland"]): r["base_datum"] for r in _dm_rows}
+        _dm_typ_lookup = {(r["plan_datum"], r["bundesland"]): r["plan_typ"] for r in _dm_rows}
+
+        # Ferien-Kalender für Tag-View (Ferien-Spalte)
+        _ferien_kal = conn.execute(
+            "SELECT bundesland, art, start, ende FROM ferien_kalender "
+            "WHERE jahr=? OR jahr=?", (planjahr, planjahr - 1)
+        ).fetchall()
+
+        # Gesperrte Filialen (flag_gesperrt=1 ODER XX/XXX in Bezeichnung) herausfiltern
+        import re as _re
+        _gesperrte = set()
+        for _r in conn.execute("SELECT fil_nr, bezeichnung, flag_gesperrt FROM filialen").fetchall():
+            if _r["flag_gesperrt"] or _re.search(r'X{2,}', str(_r["bezeichnung"] or ""), _re.IGNORECASE):
+                _gesperrte.add(str(_r["fil_nr"]).strip())
+        if _gesperrte:
+            _df_raw = _df_raw[~_df_raw["fil_nr"].isin(_gesperrte)]
+
+        # Filialen ohne sinnvolle Daten herausfiltern
+        _has_data = _df_raw.groupby("fil_nr")[["budget", "ist_vj"]].sum().abs().sum(axis=1) > 0
+        _df_raw = _df_raw[_df_raw["fil_nr"].isin(_has_data[_has_data].index)]
+
+        st.session_state[_cache_key] = {
+            "df": _df_raw,
+            "last_ist_date": _last_ist_date,
+            "dm_lookup": _dm_lookup,
+            "dm_typ_lookup": _dm_typ_lookup,
+            "ferien_kal": _ferien_kal,
+        }
+    st.rerun()
+
+if _cache_key not in st.session_state:
     st.stop()
 
-# IST-Umsätze des Budgetjahrs laden (für Plan vs. tatsächlichem IST-Vergleich)
-_ist_rows_hrl = conn.execute(
-    "SELECT fil_nr, datum, umsatz FROM ist_umsatz WHERE datum LIKE ?",
-    (f"{planjahr}-%",),
-).fetchall()
-_ist_lookup_hrl = {(str(r["fil_nr"]), r["datum"]): r["umsatz"] for r in _ist_rows_hrl}
-
-eff_cols = ["ist_vj", "eff_oeffnung", "eff_wochentag",
-            "eff_preis", "eff_ferien", "eff_feiertag", "budget"]
-for col in eff_cols + ["eff_norm", "eff_verteilung"]:
-    if col not in df_all.columns:
-        df_all[col] = 0.0
-    df_all[col] = pd.to_numeric(df_all[col], errors="coerce").fillna(0.0)
-
-if "budget" not in df_all.columns or df_all["budget"].sum() == 0:
-    for alt in ["gesamt_plan", "tagesumsatz_plan"]:
-        if alt in df_all.columns:
-            df_all["budget"] = pd.to_numeric(df_all[alt], errors="coerce").fillna(0.0)
-            break
-
-df_all["datum"] = pd.to_datetime(df_all["datum"])
-df_all["_iso"] = df_all["datum"].dt.strftime("%Y-%m-%d")
-
-# Datumsmapping für Basisdatum-Spalte und Tagestyp (inkl. Feiertagstag) im Tag-View
-from planning.engine import _normalize_bl as _nbl_hrl
-_dm_rows = conn.execute(
-    "SELECT plan_datum, base_datum, bundesland, plan_typ FROM datumsmapping "
-    "WHERE CAST(strftime('%Y', plan_datum) AS INTEGER)=?",
-    (planjahr,),
-).fetchall()
-_dm_lookup = {(r["plan_datum"], r["bundesland"]): r["base_datum"] for r in _dm_rows}
-_dm_typ_lookup = {(r["plan_datum"], r["bundesland"]): r["plan_typ"] for r in _dm_rows}
-
-# ist_vj ist nach dem Planungslauf bereits korrekt in planung gespeichert
-# (fix_ist_vj synchronisiert es nach jedem Planungslauf und Datumsmapping-Neugenerierung).
-# Kein row-by-row apply nötig.
-
-def _base_datum_for(row) -> str:
-    iso = row["datum"].strftime("%Y-%m-%d")
-    bl = str(row.get("bundesland", "") or "")
-    bd = _dm_lookup.get((iso, bl)) or _dm_lookup.get((iso, "alle")) or ""
-    if not bd:
-        return ""
-    try:
-        return pd.Timestamp(bd).strftime("%d.%m.%Y")
-    except Exception:
-        return bd
-
-# Last imported day for IST comparison limit
-_last_ist_date = conn.execute(
-    "SELECT MAX(datum) FROM ist_umsatz WHERE datum LIKE ?", (f"{planjahr}-%",)
-).fetchone()[0] or ""
-
-if _ist_rows_hrl:
-    _ist_df_hrl = pd.DataFrame(
-        [(str(r["fil_nr"]), r["datum"], r["umsatz"]) for r in _ist_rows_hrl],
-        columns=["fil_nr", "_iso_key", "ist_aktuell"]
-    )
-    df_all["fil_nr_str"] = df_all["fil_nr"].astype(str)
-    df_all = df_all.merge(
-        _ist_df_hrl, left_on=["fil_nr_str", "_iso"], right_on=["fil_nr", "_iso_key"], how="left"
-    ).drop(columns=["fil_nr_x" if "fil_nr_x" in df_all.columns else "fil_nr_str",
-                     "_iso_key", "fil_nr_y" if "fil_nr_y" in df_all.columns else "fil_nr_str"],
-           errors="ignore")
-    # merge erzeugt ggf. fil_nr_x/fil_nr_y — bereinigen
-    if "fil_nr_x" in df_all.columns:
-        df_all = df_all.rename(columns={"fil_nr_x": "fil_nr"}).drop(columns=["fil_nr_y"], errors="ignore")
-    df_all = df_all.drop(columns=["fil_nr_str"], errors="ignore")
-else:
-    df_all["ist_aktuell"] = None
-if "bundesland" not in df_all.columns or df_all["bundesland"].isna().all():
-    bl_map = {r[0]: r[1] for r in conn.execute("SELECT fil_nr, bundesland FROM filialen").fetchall()}
-    df_all["bundesland"] = df_all["fil_nr"].map(bl_map).fillna("?")
-
-for col in ["tagestyp", "feiertag_name", "ferien_art"]:
-    if col not in df_all.columns:
-        df_all[col] = ""
-    df_all[col] = df_all[col].fillna("")
-
-# Gesperrte Filialen aus Anzeige entfernen
-_gesperrte_fils = {str(r[0]) for r in conn.execute(
-    "SELECT fil_nr FROM filialen WHERE flag_gesperrt=1").fetchall()}
-if _gesperrte_fils:
-    df_all = df_all[~df_all["fil_nr"].astype(str).isin(_gesperrte_fils)]
-
-# Filter out branches with no meaningful data (all budget and ist_vj = 0)
-fil_has_data = df_all.groupby("fil_nr")[["budget", "ist_vj"]].sum().abs().sum(axis=1) > 0
-active_fils = set(fil_has_data[fil_has_data].index)
-df_all = df_all[df_all["fil_nr"].isin(active_fils)]
+_cached = st.session_state[_cache_key]
+df_all = _cached["df"].copy()
+_last_ist_date = _cached["last_ist_date"]
+_dm_lookup = _cached["dm_lookup"]
+_dm_typ_lookup = _cached["dm_typ_lookup"]
+_ferien_kal_rows = _cached["ferien_kal"]
+_col_hint.caption(f"{len(df_all):,} Planzeilen geladen · {df_all['fil_nr'].nunique()} Filialen")
 
 if df_all.empty:
     st.info("Keine berechneten Planungsdaten vorhanden.")
     st.stop()
 
-# ── Filter (at top, state persisted via key) ──────────────────────────────
+eff_cols = ["ist_vj", "eff_oeffnung", "eff_wochentag",
+            "eff_preis", "eff_ferien", "eff_feiertag", "budget"]
+
+# ── Filter ─────────────────────────────────────────────────────────────────
 cf1, cf2 = st.columns(2)
 with cf1:
     fil_filter = st.multiselect(
@@ -152,22 +178,24 @@ with c1:
     )
 with c2:
     entity_ebene = st.selectbox(
-        "Aggregations-Ebene", ["Filiale", "Bundesland", "Gesamt"],
+        "Aggregations-Ebene", ["Filiale", "Bundesland", "Gesamt"], index=2,
         key="herleitung_entity",
     )
 
-# ── Zeit-Gruppierung ────────────────────────────────────────────────────────
+# ── Zeit-Gruppierung (vektorisiert) ────────────────────────────────────────
+MONATE_S = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
+
 if zeit_ebene == "Tag":
     df_all["Zeit"] = df_all["datum"].dt.strftime("%d.%m.%Y")
     df_all["_sort"] = df_all["datum"]
 elif zeit_ebene == "Woche":
-    iso = df_all["datum"].dt.isocalendar()
-    df_all["Zeit"] = "KW " + iso["week"].astype(str).str.zfill(2) + "/" + iso["year"].astype(str)
-    df_all["_sort"] = df_all["datum"].dt.to_period("W").apply(lambda p: p.start_time)
+    _iso_cal = df_all["datum"].dt.isocalendar()
+    df_all["Zeit"] = "KW " + _iso_cal["week"].astype(str).str.zfill(2) + "/" + _iso_cal["year"].astype(str)
+    # Vektorisiert: Montag der jeweiligen Woche
+    df_all["_sort"] = df_all["datum"] - pd.to_timedelta(df_all["datum"].dt.weekday, unit="D")
 elif zeit_ebene == "Monat":
-    MON = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
-    df_all["Zeit"] = df_all["datum"].dt.month.map(lambda m: MON[m - 1]) + " " + df_all["datum"].dt.year.astype(str)
-    df_all["_sort"] = df_all["datum"].dt.to_period("M").apply(lambda p: p.start_time)
+    df_all["Zeit"] = df_all["datum"].dt.month.map(lambda m: MONATE_S[m - 1]) + " " + df_all["datum"].dt.year.astype(str)
+    df_all["_sort"] = df_all["datum"].dt.to_period("M").dt.to_timestamp()
 else:
     df_all["Zeit"] = df_all["datum"].dt.year.astype(str)
     df_all["_sort"] = df_all["datum"].dt.year
@@ -178,20 +206,17 @@ if entity_ebene == "Filiale":
 elif entity_ebene == "Bundesland":
     group_keys = ["bundesland"] + group_keys
 
-extra_agg = {}
+extra_agg: dict = {}
 if zeit_ebene == "Tag":
     for c in ["wochentag", "tagestyp", "feiertag_name", "ferien_art", "_iso"]:
         if c in df_all.columns:
             extra_agg[c] = "first"
-    # bundesland only in extra_agg for Filiale entity (for Bundesland it's a group key already)
     if entity_ebene == "Filiale" and "bundesland" in df_all.columns:
         extra_agg["bundesland"] = "first"
 
-# Budget up to last imported day (for Abw. IST comparison)
+# Budget bis zum letzten importierten Tag (für IST-Vergleich)
 if _last_ist_date:
-    df_all["_budget_for_ist"] = df_all["budget"].where(
-        df_all["_iso"] <= _last_ist_date, other=None
-    )
+    df_all["_budget_for_ist"] = df_all["budget"].where(df_all["_iso"] <= _last_ist_date, other=None)
 else:
     df_all["_budget_for_ist"] = None
 
@@ -199,31 +224,21 @@ agg = (df_all.groupby([k for k in group_keys if k != "_sort"], as_index=False)
        .agg({**{c: "sum" for c in eff_cols},
              "ist_aktuell": lambda x: x.sum() if x.notna().any() else None,
              "_budget_for_ist": lambda x: x.sum() if x.notna().any() else None,
-             "_sort": "min", **extra_agg})
+             "_sort": "min",
+             **extra_agg})
        .sort_values([k for k in (["_sort"] if entity_ebene == "Gesamt"
                                   else [group_keys[0], "_sort"])]))
 agg = agg.reset_index(drop=True)
 
-WT_MAP = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+# ── Tag-View: Basisdatum, Tagestyp, Ferieninfo (nur bei Tag-View nötig) ────
+from planning.engine import _normalize_bl as _nbl_hrl
 
-def _build_tagesinfo(tagestyp, feiertag_name):
-    parts = []
-    typ = tagestyp or ""
-    name = feiertag_name or ""
-    if typ in ("feiertag", "sondertag") and name:
-        parts.append(name)
-    # feiertagstag: nicht mehr in Tagesinfo anzeigen (liegt ggf. in Ferien → Ferien-Spalte)
-    elif typ == "geschlossen":
-        if name:
-            parts.append(f"Geschlossen ({name})")
-        else:
-            parts.append("Geschlossen")
-    return " | ".join(parts) if parts else ""
+WT_MAP = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 if zeit_ebene == "Tag":
     if "wochentag" in agg.columns:
         agg["_wt_str"] = agg["wochentag"].apply(
-            lambda w: WT_MAP[int(w)] if pd.notna(w) else "")
+            lambda w: WT_MAP[int(w)] if pd.notna(w) and str(w).strip() != "" else "")
 
     def _row_iso(row) -> str:
         iso = str(row.get("_iso", "") or "")
@@ -235,8 +250,10 @@ if zeit_ebene == "Tag":
             return ""
 
     def _row_bl(row) -> str:
-        return _nbl_hrl(str(row.get("bundesland", "") or "")) if row.get("bundesland") else ""
+        bl = str(row.get("bundesland", "") or "")
+        return _nbl_hrl(bl) if bl else ""
 
+    # Vektorisierter Basisdatum-Lookup (über Index-Tuple)
     def _lookup_basisdatum(row) -> str:
         iso = _row_iso(row)
         bl = _row_bl(row)
@@ -249,7 +266,6 @@ if zeit_ebene == "Tag":
             return bd
 
     def _eff_daytype(row) -> str:
-        """Effektiver Tagestyp inkl. Feiertagstag (aus Datumsmapping ergänzt)."""
         typ = str(row.get("tagestyp", "") or "")
         if typ in ("feiertag", "sondertag", "ferien", "geschlossen"):
             return typ
@@ -259,18 +275,15 @@ if zeit_ebene == "Tag":
             return dm_typ
         return typ
 
-    agg["_basisdatum"] = agg.apply(_lookup_basisdatum, axis=1)
-    agg["_daytype"] = agg.apply(_eff_daytype, axis=1)
-    agg["_tagesinfo"] = agg.apply(
-        lambda r: _build_tagesinfo(r.get("tagestyp", ""), r.get("feiertag_name", "")),
-        axis=1)
+    def _build_tagesinfo(tagestyp, feiertag_name):
+        typ = tagestyp or ""
+        name = feiertag_name or ""
+        if typ in ("feiertag", "sondertag") and name:
+            return name
+        if typ == "geschlossen":
+            return f"Geschlossen ({name})" if name else "Geschlossen"
+        return ""
 
-    # Für Feiertag/Feiertagstag-Tage die Ferienbezeichnung aus ferien_kalender nachschlagen,
-    # damit die Ferien-Spalte auch dann befüllt ist, wenn der Feiertag in Ferien fällt.
-    _ferien_kal_rows = conn.execute(
-        "SELECT bundesland, art, start, ende FROM ferien_kalender "
-        "WHERE jahr=? OR jahr=?", (planjahr, planjahr - 1)
-    ).fetchall()
     def _ferien_art_for_date(iso_date: str, bl: str) -> str:
         try:
             d = pd.Timestamp(iso_date).date()
@@ -297,24 +310,28 @@ if zeit_ebene == "Tag":
             return _ferien_art_for_date(iso, bl)
         return existing
 
-    agg["ferien_art"] = agg.apply(_enrich_ferien_art, axis=1)
+    # Apply-Calls laufen hier nur auf der gefilterten/aggregierten Tabelle
+    agg["_basisdatum"] = agg.apply(_lookup_basisdatum, axis=1)
+    agg["_daytype"]    = agg.apply(_eff_daytype, axis=1)
+    agg["_tagesinfo"]  = agg.apply(
+        lambda r: _build_tagesinfo(r.get("tagestyp", ""), r.get("feiertag_name", "")), axis=1)
+    agg["ferien_art"]  = agg.apply(_enrich_ferien_art, axis=1)
 
-    # Ferien: Basis ist immer ein VJ-Ferientag (direkter Vergleich) → kein Ferieneffekt nötig.
-    _ferien_rows = agg["_daytype"] == "ferien"
-    agg.loc[_ferien_rows, "eff_ferien"] = None
+    # Ferien-Tage: direkt vergleichbarer VJ-Tag → kein Ferieneffekt anzeigen
+    agg.loc[agg["_daytype"] == "ferien", "eff_ferien"] = None
 
-
-# IST aktuell vs. Budget — nur bis zum letzten importierten Tag
+# ── IST-Abweichung ─────────────────────────────────────────────────────────
 agg["Abw. €"] = agg.apply(
     lambda x: round(float(x["ist_aktuell"]) - float(x["_budget_for_ist"]), 2)
-    if not pd.isna(x["ist_aktuell"]) and not pd.isna(x.get("_budget_for_ist")) else None, axis=1
+    if pd.notna(x["ist_aktuell"]) and pd.notna(x.get("_budget_for_ist")) else None, axis=1
 )
 agg["Abw. %"] = agg.apply(
     lambda x: round(float(x["Abw. €"]) / float(x["_budget_for_ist"]) * 100, 0)
-    if not pd.isna(x.get("Abw. €")) and float(x.get("_budget_for_ist", 0) or 0) != 0 else None,
-    axis=1
+    if pd.notna(x.get("Abw. €")) and float(x.get("_budget_for_ist", 0) or 0) != 0 else None,
+    axis=1,
 )
 
+# ── Spalten umbenennen & anordnen ──────────────────────────────────────────
 rename = {
     "fil_nr": "Filiale", "bundesland": "Bundesland",
     "ist_vj": "IST Basis", "eff_oeffnung": "+ Öffnung",
@@ -330,23 +347,20 @@ if zeit_ebene == "Tag":
     rename["ferien_art"] = "Ferien"
 
 drop_cols = ["_sort", "eff_norm", "eff_verteilung", "_budget_for_ist", "_iso", "_daytype"] + [
-    c for c in ["wochentag", "tagestyp", "feiertag_name"]
-    if c in agg.columns and zeit_ebene == "Tag"
+    c for c in ["wochentag", "tagestyp", "feiertag_name"] if c in agg.columns and zeit_ebene == "Tag"
 ]
-# ferien_art kept for Tag level (shown as "Ferien" column); drop for other levels
 if zeit_ebene != "Tag":
-    drop_cols += [c for c in ["ferien_art"] if c in agg.columns]
-if zeit_ebene != "Tag" and "_basisdatum" in agg.columns:
-    drop_cols.append("_basisdatum")
+    drop_cols += [c for c in ["ferien_art", "_basisdatum"] if c in agg.columns]
+
 disp = agg.drop(columns=[c for c in drop_cols if c in agg.columns]).rename(columns=rename)
 
 if zeit_ebene == "Tag":
     lead = [c for c in ["Filiale", "Datum", "Basisdatum", "Wt.", "Tagesinfo", "Ferien"] if c in disp.columns]
 else:
-    lead = [c for c in ["Filiale", "Zeit"] if c in disp.columns]
+    lead = [c for c in ["Filiale", "Bundesland", "Zeit"] if c in disp.columns]
+
 ordered = lead + ["IST Basis", "+ Öffnung", "+ Wochentag", "+ Preis",
-                  "+ Ferien", "+ Feiertag", "= Budget",
-                  "= IST", "Abw. €", "Abw. %"]
+                  "+ Ferien", "+ Feiertag", "= Budget", "= IST", "Abw. €", "Abw. %"]
 disp = disp[[c for c in ordered if c in disp.columns]]
 
 # ── Kennzahlen ─────────────────────────────────────────────────────────────
@@ -414,28 +428,23 @@ if "Abw. %" in disp_fmt.columns:
 
 col_cfg = {
     "Tagesinfo":    st.column_config.TextColumn("Tagesinfo",
-        help="Feiertag, Sondertag oder Schließtag",
-        width="medium"),
+        help="Feiertag, Sondertag oder Schließtag", width="medium"),
     "Ferien":       st.column_config.TextColumn("Ferien",
-        help="Ferienname wenn der Tag in einer Schulferienperiode liegt",
-        width="medium"),
+        help="Ferienname wenn der Tag in einer Ferienperiode liegt", width="medium"),
     "Basisdatum":   st.column_config.TextColumn("Basisdatum",
         help="Referenztag aus dem Basiszeitraum, dessen IST-Umsatz als Grundlage dient"),
     "IST Basis":    st.column_config.TextColumn("IST Basis",
-        help="Tagesumsatz des Basiszeitraum-Referenztags (gleicher Wochentag, gleiches Monat im Vorjahr)"),
+        help="Tagesumsatz des Basiszeitraum-Referenztags (gleicher Wochentag, Basisjahr)"),
     "+ Öffnung":   st.column_config.TextColumn("+ Öffnung",
-        help="Effekt durch geänderte Öffnungstage: positiv wenn Filiale im Planjahr mehr Tage geöffnet hat, negativ wenn weniger"),
+        help="Effekt durch geänderte Öffnungstage: positiv wenn mehr Tage geöffnet, negativ wenn weniger"),
     "+ Wochentag": st.column_config.TextColumn("+ Wochentag",
-        help="Wochentagsmix-Effekt: Planjahr hat andere Wochentag-Verteilung als Basisjahr. "
-             "Z.B. Jan 2026 hat einen Montag mehr als Jan 2025 → positiver Wert"),
+        help="Wochentagsmix-Effekt: Planjahr hat andere Wochentag-Verteilung als Basisjahr"),
     "+ Preis":     st.column_config.TextColumn("+ Preis",
         help="Preis- / Wachstumseffekt aus den Preisanpassungsparametern (% je Monat)"),
     "+ Ferien":    st.column_config.TextColumn("+ Ferien",
-        help="Ferieneffekt: Verhältnis Ø Ferienwochenumsatz zu Ø Pufferwochenumsatz (wochentags-gematcht). "
-             "Positiv bei Bäckereien mit Mehrumsatz in Ferien, negativ bei Schulfilialen"),
+        help="Ferieneffekt: Verhältnis Ø Ferienwochenumsatz zu Ø Pufferwochenumsatz"),
     "+ Feiertag":  st.column_config.TextColumn("+ Feiertag",
-        help="Feiertags-/Sondertag-Effekt. Geschlossener Feiertag = negativer Wert (kein Umsatz). "
-             "Sondertag (z.B. Muttertag) = positiver Wert"),
+        help="Feiertags-/Sondertag-Effekt. Geschlossener Feiertag = negativer Wert"),
     "= Budget":    st.column_config.TextColumn("= Budget",
         help="Tagesbudget = IST Basis + alle Effekte"),
     "= IST":       st.column_config.TextColumn("= IST",
@@ -443,7 +452,7 @@ col_cfg = {
     "Abw. €":      st.column_config.TextColumn("Abw. €",
         help="IST − Budget (positiv = über Budget, negativ = unter Budget)"),
     "Abw. %":      st.column_config.TextColumn("Abw. %",
-        help="Abweichung IST vs. Budget in Prozent (ohne Nachkommastellen)"),
+        help="Abweichung IST vs. Budget in Prozent"),
 }
 
 st.dataframe(
@@ -471,7 +480,7 @@ st.download_button(
     type="primary",
 )
 
-# ── Legende (immer ausgeklappt) ──────────────────────────────────────────────
+# ── Legende ──────────────────────────────────────────────────────────────────
 st.divider()
 with st.expander("📖 Legende — Spaltenbezeichnungen und Berechnungslogik", expanded=True):
     st.markdown("""
@@ -483,7 +492,7 @@ with st.expander("📖 Legende — Spaltenbezeichnungen und Berechnungslogik", e
 | **+ Öffnung** | Effekt durch geänderte Öffnungstage im Planjahr | Filiale öffnet ab 2026 samstags (+432 €); geschlossener Feiertag (−2.500 €) |
 | **+ Wochentag** | Wochentagsmix-Effekt: hat Planjahr mehr/weniger bestimmte Wochentage als Basisjahr? | Jan 2026 hat 5 Montage, Jan 2025 hatte 4 → ein Montag-Anteil mehr → +200 € |
 | **+ Preis** | Preis-/Wachstumsfaktor aus den Preisanpassungsparametern (% je Monat) | 3 % im Jan → Basisbetrag × 3 % / offene Tage ≈ +53 € je Tag |
-| **+ Ferien** | Ferienfaktor: Verhältnis Ø Ferienwochenumsatz zu Ø Pufferwochenumsatz | Osterferien: +20 % → +1.100 €; Schulfiliale in Ferien: −40 % → −800 € |
+| **+ Ferien** | Ferienfaktor: Verhältnis Ø Ferienwochenumsatz zu Ø Pufferwochenumsatz | Osterferien: +20 % → +1.100 €; Filiale in Ferien geschlossen: −40 % → −800 € |
 | **+ Feiertag** | Feiertags-/Sondertag-Effekt (Abweichung vom normalen Tagswert) | Christi Himmelfahrt geschlossen → −5.000 €; Muttertag Mehrumsatz → +600 € |
 | **= Budget** | Tagesbudget = IST Basis + Summe aller Effekte | 5.234 − 500 + 200 + 53 + 0 + 0 = **4.987 €** |
 
