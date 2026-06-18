@@ -5,8 +5,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from ui.session import get_conn, get_gmbh, require_db
-from database.importer import import_ist_umsatz, _detect_columns, detect_oeffnungstage
+from database.importer import import_ist_umsatz, _detect_columns, detect_oeffnungstage, _parse_num, fmt_num_de
 import pandas as pd
+import time as _time
 
 require_db()
 conn = get_conn()
@@ -16,7 +17,7 @@ st.markdown("""
 Erwartet eine Datei mit mindestens drei Spalten:
 - **Datum** (z.B. `15.01.2024` oder `2024-01-15`)
 - **Filialnummer** (z.B. `0120`)
-- **Umsatz** (Dezimalzahl)
+- **Umsatz** (Dezimalzahl, deutsches Format: `1.234.567,89`)
 
 Weitere Spalten werden ignoriert.
 """)
@@ -40,14 +41,14 @@ uploaded = st.file_uploader(
     key=f"ist_uploader_{st.session_state['ist_upload_key']}",
 )
 
-# ── Import-Vorschau (solange noch nicht importiert) ───────────────────────
+# ── Spalten-Erkennung & Vorschau ─────────────────────────────────────────────
 if uploaded is not None:
     try:
         uploaded.seek(0)
         if uploaded.name.lower().endswith((".xlsx", ".xls")):
-            _df_prev = pd.read_excel(uploaded, dtype=str, nrows=200)
+            _df_prev = pd.read_excel(uploaded, dtype=str)
         else:
-            _df_prev = pd.read_csv(uploaded, dtype=str, sep=None, engine="python", nrows=200)
+            _df_prev = pd.read_csv(uploaded, dtype=str, sep=None, engine="python")
         uploaded.seek(0)
 
         _col_map_prev = _detect_columns(_df_prev.columns.tolist())
@@ -55,18 +56,33 @@ if uploaded is not None:
 
         with st.expander("🔍 Spalten-Erkennung & Vorschau", expanded=not _ok):
             c_d, c_f, c_u = st.columns(3)
-            c_d.metric("Datum-Spalte",   _col_map_prev.get("datum")  or "❌ nicht erkannt")
-            c_f.metric("Filial-Spalte",  _col_map_prev.get("fil_nr") or "❌ nicht erkannt")
-            c_u.metric("Umsatz-Spalte",  _col_map_prev.get("umsatz") or "❌ nicht erkannt")
+            c_d.metric("Datum-Spalte",  _col_map_prev.get("datum")  or "❌ nicht erkannt")
+            c_f.metric("Filial-Spalte", _col_map_prev.get("fil_nr") or "❌ nicht erkannt")
+            c_u.metric("Umsatz-Spalte", _col_map_prev.get("umsatz") or "❌ nicht erkannt")
             if not _ok:
                 st.error("Mindestens eine Pflicht-Spalte wurde nicht erkannt. "
                          "Spaltennamen prüfen (Datum, Filialnummer, Umsatz brutto).")
-            st.caption(f"Erste Zeilen der Datei (max. 200):")
-            st.dataframe(_df_prev.head(10), use_container_width=True, hide_index=True)
+
+            # Vorschau-Tabelle mit formatiertem Datum und Umsatz
+            _prev10 = _df_prev.head(10).copy()
+            _dcol = _col_map_prev.get("datum")
+            _ucol = _col_map_prev.get("umsatz")
+            if _dcol and _dcol in _prev10.columns:
+                _prev10[_dcol] = (
+                    pd.to_datetime(_prev10[_dcol], dayfirst=True, errors="coerce")
+                    .dt.strftime("%d.%m.%Y")
+                    .fillna(_df_prev[_dcol].head(10))
+                )
+            if _ucol and _ucol in _prev10.columns:
+                _prev10[_ucol] = _prev10[_ucol].apply(
+                    lambda v: fmt_num_de(_parse_num(str(v))) if str(v).strip() else v
+                )
+            st.caption(f"Erste 10 Zeilen der Datei ({len(_df_prev):,} Zeilen gesamt):")
+            st.dataframe(_prev10, use_container_width=True, hide_index=True)
     except Exception as _e:
         st.warning(f"Vorschau nicht möglich: {_e}")
 
-# Check existing data
+# ── Import-Button ─────────────────────────────────────────────────────────────
 existing_count = conn.execute("SELECT COUNT(*) FROM ist_umsatz").fetchone()[0]
 
 if st.button("⬆️ Importieren", type="primary", disabled=uploaded is None):
@@ -113,7 +129,25 @@ if st.session_state.get("_do_import"):
                     f"**{', '.join(_missing)}**. Bitte zuerst unter **Filialen** anlegen."
                 )
 
-        n, warnings = import_ist_umsatz(conn, uploaded, file_name=uploaded.name)
+        # Fortschrittsbalken mit Zeitschätzung
+        _prog = st.progress(0, text="Starte Import…")
+        _t_start = _time.monotonic()
+
+        def _progress_cb(pct: float, text: str):
+            elapsed = _time.monotonic() - _t_start
+            if pct > 0.05 and pct < 1.0:
+                remaining = elapsed / pct * (1.0 - pct)
+                _m, _s = divmod(int(remaining), 60)
+                hint = f" — noch ca. {_m}:{_s:02d} min" if _m else f" — noch ca. {_s} s"
+            else:
+                hint = ""
+            _prog.progress(min(pct, 1.0), text=f"{text}{hint}")
+
+        n, warnings = import_ist_umsatz(
+            conn, uploaded, file_name=uploaded.name, progress_cb=_progress_cb
+        )
+        _prog.empty()
+
         det = detect_oeffnungstage(conn, force=False)
         msg = f"✅ {n:,} Datensätze importiert."
         if det["weekday_branches"]:
@@ -137,6 +171,7 @@ if st.session_state.get("_do_import"):
         }
     st.rerun()
 
+# ── Aktueller Datenbestand ────────────────────────────────────────────────────
 st.divider()
 st.subheader("Aktueller Datenbestand")
 
@@ -154,26 +189,17 @@ summary = pd.read_sql("""
 if summary.empty:
     st.info("Noch keine IST-Daten vorhanden.")
 else:
-    # Datumsformat DD.MM.YYYY
-    summary["von"] = pd.to_datetime(summary["von"], errors="coerce").dt.strftime("%d.%m.%Y")
-    summary["bis"] = pd.to_datetime(summary["bis"], errors="coerce").dt.strftime("%d.%m.%Y")
-
-    # Deutsche Zahlenformatierung
     def _fmt_int_de(v):
         try:
             return f"{int(v):,}".replace(",", ".")
         except Exception:
             return str(v)
 
-    def _fmt_eur_de(v):
-        try:
-            return f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " €"
-        except Exception:
-            return str(v)
-
     summary_fmt = summary.copy()
+    summary_fmt["von"] = pd.to_datetime(summary_fmt["von"], errors="coerce").dt.strftime("%d.%m.%Y")
+    summary_fmt["bis"] = pd.to_datetime(summary_fmt["bis"], errors="coerce").dt.strftime("%d.%m.%Y")
     summary_fmt["tage"]       = summary_fmt["tage"].apply(_fmt_int_de)
-    summary_fmt["gesamt_eur"] = summary_fmt["gesamt_eur"].apply(_fmt_eur_de)
+    summary_fmt["gesamt_eur"] = summary_fmt["gesamt_eur"].apply(fmt_num_de) + " €"
 
     summary_fmt = summary_fmt.rename(columns={
         "fil_nr":     "Filialnummer",
@@ -184,6 +210,8 @@ else:
     })
     st.dataframe(summary_fmt, use_container_width=True, hide_index=True)
 
-    col1, col2 = st.columns(2)
+    gesamtumsatz_total = float(summary["gesamt_eur"].sum())
+    col1, col2, col3 = st.columns(3)
     col1.metric("Filialen mit IST-Daten", len(summary))
     col2.metric("Datensätze gesamt", _fmt_int_de(summary["tage"].sum()))
+    col3.metric("Gesamtumsatz importiert", fmt_num_de(gesamtumsatz_total) + " €")
