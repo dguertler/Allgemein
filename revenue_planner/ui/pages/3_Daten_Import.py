@@ -39,12 +39,12 @@ conn = get_conn()
 st.title("IST-Umsätze importieren")
 
 st.markdown("""
-Erwartet eine Datei mit mindestens drei Spalten:
+Erwartet eine CSV-Datei mit mindestens drei Spalten:
 - **Datum** (z.B. `15.01.2024` oder `2024-01-15`)
 - **Filialnummer** (z.B. `0120`)
-- **Umsatz** (Dezimalzahl, deutsches Format: `1.234.567,89`)
+- **Umsatz** (Dezimalzahl, deutsches Format: `1.234,89`)
 
-Weitere Spalten werden ignoriert.
+Trennzeichen `;` oder `,` werden automatisch erkannt. Weitere Spalten werden ignoriert.
 """)
 
 # Show result from previous import (above uploader)
@@ -61,8 +61,8 @@ if "ist_upload_key" not in st.session_state:
     st.session_state["ist_upload_key"] = 0
 
 uploaded = st.file_uploader(
-    "Datei hochladen (Excel oder CSV)",
-    type=["xlsx", "xls", "csv"],
+    "Datei hochladen (CSV)",
+    type=["csv"],
     key=f"ist_uploader_{st.session_state['ist_upload_key']}",
 )
 
@@ -70,11 +70,7 @@ uploaded = st.file_uploader(
 if uploaded is not None:
     try:
         uploaded.seek(0)
-        if uploaded.name.lower().endswith((".xlsx", ".xls")):
-            _df_prev = pd.read_excel(uploaded, dtype=str)
-            uploaded.seek(0)
-        else:
-            _df_prev = _read_csv_robust(uploaded)
+        _df_prev = _read_csv_robust(uploaded)
 
         _col_map_prev = _detect_columns(_df_prev.columns.tolist())
         _ok = all(v is not None for v in _col_map_prev.values())
@@ -136,11 +132,7 @@ if st.session_state.get("_do_import"):
     try:
         # Validate: all fil_nrs in the file must exist in filialen
         uploaded.seek(0)
-        if uploaded.name.lower().endswith((".xlsx", ".xls")):
-            _df_chk = pd.read_excel(uploaded, dtype=str)
-            uploaded.seek(0)
-        else:
-            _df_chk = _read_csv_robust(uploaded)
+        _df_chk = _read_csv_robust(uploaded)
 
         _col_map = _detect_columns(_df_chk.columns.tolist())
         if _col_map.get("fil_nr"):
