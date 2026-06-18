@@ -182,9 +182,51 @@ with c2:
         key="herleitung_entity",
     )
 
-# ── Zeit-Gruppierung (vektorisiert) ────────────────────────────────────────
+# ── Zeit-Filter (abhängig von Zeit-Ebene) ──────────────────────────────────
 MONATE_S = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
 
+if zeit_ebene == "Monat":
+    _available_months = sorted(df_all["datum"].dt.month.unique())
+    _month_opts = [MONATE_S[m - 1] for m in _available_months]
+    _sel_months = st.multiselect(
+        "Monate", _month_opts, placeholder="Alle Monate",
+        key="herleitung_monat_filter",
+    )
+    if _sel_months:
+        _sel_month_nums = [MONATE_S.index(m) + 1 for m in _sel_months]
+        df_all = df_all[df_all["datum"].dt.month.isin(_sel_month_nums)]
+
+elif zeit_ebene == "Woche":
+    _iso_cal_f = df_all["datum"].dt.isocalendar()
+    _kw_labels = sorted(
+        ("KW " + _iso_cal_f["week"].astype(str).str.zfill(2) + "/" + _iso_cal_f["year"].astype(str)).unique()
+    )
+    _sel_kws = st.multiselect(
+        "Kalenderwochen", _kw_labels, placeholder="Alle Wochen",
+        key="herleitung_kw_filter",
+    )
+    if _sel_kws:
+        _sel_kw_set = set(_sel_kws)
+        _kw_series = "KW " + _iso_cal_f["week"].astype(str).str.zfill(2) + "/" + _iso_cal_f["year"].astype(str)
+        df_all = df_all[_kw_series.isin(_sel_kw_set)]
+
+elif zeit_ebene == "Tag":
+    _min_d = df_all["datum"].min().date()
+    _max_d = df_all["datum"].max().date()
+    _date_range = st.date_input(
+        "Zeitraum",
+        value=(_min_d, _max_d),
+        min_value=_min_d,
+        max_value=_max_d,
+        format="DD.MM.YYYY",
+        key="herleitung_tag_filter",
+    )
+    if isinstance(_date_range, (list, tuple)) and len(_date_range) == 2:
+        _d_from = pd.Timestamp(_date_range[0])
+        _d_to   = pd.Timestamp(_date_range[1])
+        df_all = df_all[(df_all["datum"] >= _d_from) & (df_all["datum"] <= _d_to)]
+
+# ── Zeit-Gruppierung (vektorisiert) ────────────────────────────────────────
 if zeit_ebene == "Tag":
     df_all["Zeit"] = df_all["datum"].dt.strftime("%d.%m.%Y")
     df_all["_sort"] = df_all["datum"]
