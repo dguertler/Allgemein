@@ -40,6 +40,32 @@ uploaded = st.file_uploader(
     key=f"ist_uploader_{st.session_state['ist_upload_key']}",
 )
 
+# ── Import-Vorschau (solange noch nicht importiert) ───────────────────────
+if uploaded is not None:
+    try:
+        uploaded.seek(0)
+        if uploaded.name.lower().endswith((".xlsx", ".xls")):
+            _df_prev = pd.read_excel(uploaded, dtype=str, nrows=200)
+        else:
+            _df_prev = pd.read_csv(uploaded, dtype=str, sep=None, engine="python", nrows=200)
+        uploaded.seek(0)
+
+        _col_map_prev = _detect_columns(_df_prev.columns.tolist())
+        _ok = all(v is not None for v in _col_map_prev.values())
+
+        with st.expander("🔍 Spalten-Erkennung & Vorschau", expanded=not _ok):
+            c_d, c_f, c_u = st.columns(3)
+            c_d.metric("Datum-Spalte",   _col_map_prev.get("datum")  or "❌ nicht erkannt")
+            c_f.metric("Filial-Spalte",  _col_map_prev.get("fil_nr") or "❌ nicht erkannt")
+            c_u.metric("Umsatz-Spalte",  _col_map_prev.get("umsatz") or "❌ nicht erkannt")
+            if not _ok:
+                st.error("Mindestens eine Pflicht-Spalte wurde nicht erkannt. "
+                         "Spaltennamen prüfen (Datum, Filialnummer, Umsatz brutto).")
+            st.caption(f"Erste Zeilen der Datei (max. 200):")
+            st.dataframe(_df_prev.head(10), use_container_width=True, hide_index=True)
+    except Exception as _e:
+        st.warning(f"Vorschau nicht möglich: {_e}")
+
 # Check existing data
 existing_count = conn.execute("SELECT COUNT(*) FROM ist_umsatz").fetchone()[0]
 
@@ -128,14 +154,36 @@ summary = pd.read_sql("""
 if summary.empty:
     st.info("Noch keine IST-Daten vorhanden.")
 else:
-    summary = summary.rename(columns={
-        "fil_nr": "Filialnummer",
-        "von": "Von",
-        "bis": "Bis",
-        "tage": "Tage",
+    # Datumsformat DD.MM.YYYY
+    summary["von"] = pd.to_datetime(summary["von"], errors="coerce").dt.strftime("%d.%m.%Y")
+    summary["bis"] = pd.to_datetime(summary["bis"], errors="coerce").dt.strftime("%d.%m.%Y")
+
+    # Deutsche Zahlenformatierung
+    def _fmt_int_de(v):
+        try:
+            return f"{int(v):,}".replace(",", ".")
+        except Exception:
+            return str(v)
+
+    def _fmt_eur_de(v):
+        try:
+            return f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " €"
+        except Exception:
+            return str(v)
+
+    summary_fmt = summary.copy()
+    summary_fmt["tage"]       = summary_fmt["tage"].apply(_fmt_int_de)
+    summary_fmt["gesamt_eur"] = summary_fmt["gesamt_eur"].apply(_fmt_eur_de)
+
+    summary_fmt = summary_fmt.rename(columns={
+        "fil_nr":     "Filialnummer",
+        "von":        "Von",
+        "bis":        "Bis",
+        "tage":       "Tage",
         "gesamt_eur": "Gesamtumsatz",
     })
-    st.dataframe(summary, use_container_width=True, hide_index=True)
+    st.dataframe(summary_fmt, use_container_width=True, hide_index=True)
+
     col1, col2 = st.columns(2)
     col1.metric("Filialen mit IST-Daten", len(summary))
-    col2.metric("Datensätze gesamt", f"{summary['Tage'].sum():,}")
+    col2.metric("Datensätze gesamt", _fmt_int_de(summary["tage"].sum()))

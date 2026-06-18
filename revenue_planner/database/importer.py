@@ -123,7 +123,9 @@ def _detect_columns(columns: list[str]) -> dict[str, str | None]:
     return {
         "datum":  find(["datum", "date", "tag"]),
         "fil_nr": find(["filialnummer", "filnr", "fil_nr", "filiale", "fg", "fachgeschäft"]),
-        "umsatz": find(["umsatz", "revenue", "erlös", "betrag", "umsatz brutto"]),
+        # Spezifischere Treffer zuerst: "umsatz brutto" vor "umsatz", damit nicht
+        # "Gesamtumsatz" oder "Umsatz netto" bevorzugt matchen.
+        "umsatz": find(["umsatz brutto", "umsatz netto", "umsatz", "revenue", "erlös", "betrag"]),
     }
 
 
