@@ -31,8 +31,11 @@ def _parse_num(s: str) -> float:
         return pd.to_numeric(s.replace(',', '.'), errors='coerce')
     elif '.' in s:
         parts = s.split('.')
-        # All parts after the first are exactly 3 digits → thousands separator
-        if len(parts) > 1 and all(len(p) == 3 for p in parts[1:]):
+        # Thousands separator: first group ≤ 3 digits AND all subsequent groups exactly 3 digits
+        # e.g. 2.748.956 → ["2","748","956"] ✓  but 2748.956 → ["2748","956"] ✗ (4-digit lead)
+        if (len(parts) > 1
+                and len(parts[0]) <= 3
+                and all(len(p) == 3 for p in parts[1:])):
             return pd.to_numeric(s.replace('.', ''), errors='coerce')
         # Otherwise dot is decimal separator
         return pd.to_numeric(s, errors='coerce')
