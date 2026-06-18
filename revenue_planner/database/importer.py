@@ -85,10 +85,22 @@ def import_ist_umsatz(
     if suffix in (".xlsx", ".xls"):
         df = pd.read_excel(data, dtype=str)
     else:
-        if hasattr(data, "read"):
-            df = pd.read_csv(data, dtype=str, sep=None, engine="python")
-        else:
-            df = pd.read_csv(str(data), dtype=str, sep=None, engine="python")
+        raw = data.read() if hasattr(data, "read") else open(str(data), "rb").read()
+        _loaded = False
+        for _enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1", "iso-8859-1"):
+            try:
+                df = pd.read_csv(
+                    io.BytesIO(raw), dtype=str, sep=None, engine="python", encoding=_enc
+                )
+                _loaded = True
+                break
+            except (UnicodeDecodeError, Exception):
+                continue
+        if not _loaded:
+            raise ValueError(
+                "CSV-Datei konnte mit keiner bekannten Zeichenkodierung gelesen werden "
+                "(UTF-8, Windows-1252, Latin-1). Bitte als Excel (.xlsx) exportieren."
+            )
 
     n_total_rows = len(df)
     _progress(0.15, f"Datei gelesen: {n_total_rows:,} Zeilen — prüfe Spalten…")

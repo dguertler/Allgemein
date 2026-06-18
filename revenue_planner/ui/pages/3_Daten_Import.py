@@ -8,6 +8,25 @@ from ui.session import get_conn, get_gmbh, require_db
 from database.importer import import_ist_umsatz, _detect_columns, detect_oeffnungstage, _parse_num, fmt_num_de
 import pandas as pd
 import time as _time
+import io as _io
+
+
+def _read_csv_robust(file_obj, **kwargs) -> pd.DataFrame:
+    """Read CSV trying common encodings (utf-8, cp1252, latin-1, utf-8-sig)."""
+    data = file_obj.read()
+    file_obj.seek(0)
+    for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1", "iso-8859-1"):
+        try:
+            return pd.read_csv(
+                _io.BytesIO(data), dtype=str, sep=None, engine="python",
+                encoding=enc, **kwargs
+            )
+        except (UnicodeDecodeError, Exception):
+            continue
+    raise ValueError(
+        "CSV-Datei konnte mit keiner bekannten Zeichenkodierung gelesen werden "
+        "(UTF-8, Windows-1252, Latin-1). Bitte als Excel (.xlsx) exportieren."
+    )
 
 require_db()
 conn = get_conn()
@@ -47,9 +66,9 @@ if uploaded is not None:
         uploaded.seek(0)
         if uploaded.name.lower().endswith((".xlsx", ".xls")):
             _df_prev = pd.read_excel(uploaded, dtype=str)
+            uploaded.seek(0)
         else:
-            _df_prev = pd.read_csv(uploaded, dtype=str, sep=None, engine="python")
-        uploaded.seek(0)
+            _df_prev = _read_csv_robust(uploaded)
 
         _col_map_prev = _detect_columns(_df_prev.columns.tolist())
         _ok = all(v is not None for v in _col_map_prev.values())
@@ -113,9 +132,9 @@ if st.session_state.get("_do_import"):
         uploaded.seek(0)
         if uploaded.name.lower().endswith((".xlsx", ".xls")):
             _df_chk = pd.read_excel(uploaded, dtype=str)
+            uploaded.seek(0)
         else:
-            _df_chk = pd.read_csv(uploaded, dtype=str, sep=None, engine="python")
-        uploaded.seek(0)
+            _df_chk = _read_csv_robust(uploaded)
 
         _col_map = _detect_columns(_df_chk.columns.tolist())
         if _col_map.get("fil_nr"):
