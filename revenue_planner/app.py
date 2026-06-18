@@ -173,8 +173,6 @@ pages = st.navigation({
                 title="Filial-Öffnungstage",    icon=":material/calendar_month:"),
         st.Page(str(BASE / "ui/pages/8_Feiertage_Import.py"),
                 title="Feiertage u. Ferien",    icon=":material/event:"),
-        st.Page(str(BASE / "ui/pages/12_Schulfilialen.py"),
-                title="Schulfilialen",           icon=":material/school:"),
         st.Page(str(BASE / "ui/pages/13_Datumsmapping.py"),
                 title="Datumsmapping",           icon=":material/calendar_view_day:"),
         st.Page(str(BASE / "ui/pages/11_Preisanpassung.py"),

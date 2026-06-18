@@ -16,7 +16,7 @@ st.markdown("""
 Erwartet eine Datei mit mindestens drei Spalten:
 - **Datum** (z.B. `15.01.2024` oder `2024-01-15`)
 - **Filialnummer** (z.B. `0120`)
-- **Umsatz brutto** (Dezimalzahl)
+- **Umsatz** (Dezimalzahl)
 
 Weitere Spalten werden ignoriert.
 """)
@@ -133,7 +133,7 @@ else:
         "von": "Von",
         "bis": "Bis",
         "tage": "Tage",
-        "gesamt_eur": "Gesamtumsatz brutto",
+        "gesamt_eur": "Gesamtumsatz",
     })
     st.dataframe(summary, use_container_width=True, hide_index=True)
     col1, col2 = st.columns(2)

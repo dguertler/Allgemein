@@ -198,3 +198,15 @@ st.caption(
     "*Ferien* = gleiche Ferienwoche im Basiszeitraum (wochentagsbasiert); "
     "*KW-Vergleich* = gleicher Wochentag in derselben Kalenderwoche des Basiszeitraums."
 )
+
+# Excel-Download
+import io as _io
+_xl_buf = _io.BytesIO()
+with pd.ExcelWriter(_xl_buf, engine="openpyxl") as _writer:
+    display.to_excel(_writer, index=False, sheet_name="Datumsmapping")
+st.download_button(
+    label="📥 Excel herunterladen",
+    data=_xl_buf.getvalue(),
+    file_name=f"Datumsmapping_{planjahr}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)

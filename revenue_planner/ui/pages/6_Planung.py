@@ -9,6 +9,7 @@ from planning.engine import PlanningEngine, PlanParams, DayPlan
 from planning.export import build_excel
 import pandas as pd
 from datetime import date
+import time as _time
 
 require_db()
 conn = get_conn()
@@ -46,7 +47,11 @@ basis_label = _eng.base_window_label()
 MONATE_S = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
 
 all_filialen = [r["fil_nr"] for r in
-                conn.execute("SELECT fil_nr FROM filialen ORDER BY fil_nr").fetchall()]
+                conn.execute(
+                    "SELECT fil_nr FROM filialen "
+                    "WHERE COALESCE(flag_inaktiv,0)=0 AND COALESCE(flag_gesperrt,0)=0 "
+                    "ORDER BY fil_nr"
+                ).fetchall()]
 
 run_mode = st.radio("Ausführen für", ["Alle Filialen", "Auswahl"])
 if run_mode == "Auswahl":
@@ -54,7 +59,7 @@ if run_mode == "Auswahl":
                                    placeholder="Filialen auswählen...")
 else:
     selected_fils = all_filialen
-    st.caption(f"{len(all_filialen)} Filialen")
+    st.caption(f"{len(all_filialen)} aktive Filialen")
 
 st.divider()
 
@@ -101,9 +106,18 @@ if st.session_state.get("_do_plan"):
 
         results: list[DayPlan] = []
         progress_bar = st.progress(0, text="Starte Berechnung…")
+        _t_start = _time.monotonic()
         for i, fil_nr in enumerate(aktive_fils, start=1):
             pct = int(i / n_total * 100) if n_total else 100
-            progress_bar.progress(pct, text=f"Filiale {fil_nr} … {pct} % ({i}/{n_total})")
+            elapsed = _time.monotonic() - _t_start
+            if i > 1 and n_total > i:
+                avg_s = elapsed / (i - 1)
+                remaining_s = avg_s * (n_total - i + 1)
+                _min, _sec = divmod(int(remaining_s), 60)
+                _time_hint = f" — noch ca. {_min}:{_sec:02d} min" if _min else f" — noch ca. {_sec} s"
+            else:
+                _time_hint = ""
+            progress_bar.progress(pct, text=f"Filiale {fil_nr} … {pct} % ({i}/{n_total}){_time_hint}")
             results.extend(engine.plan_branch(fil_nr))
         progress_bar.empty()
 

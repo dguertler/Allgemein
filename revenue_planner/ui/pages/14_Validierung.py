@@ -106,7 +106,7 @@ for f in filialen:
     missing = [ym for ym in expected_yms if (fn, ym) not in have]
     if missing:
         gaps.append({"Filiale": fn, "Fehlende Monate": ", ".join(sorted(missing))})
-add("warn" if gaps else "ok",
+add("crit" if gaps else "ok",
     f"Filialen mit Monaten ohne Umsatz im Basisfenster: {len(gaps)}",
     pd.DataFrame(gaps) if gaps else None,
     "Für fehlende Monate greift der Extrapolations-Fallback aus dem "
@@ -317,10 +317,10 @@ add("warn" if n_pm == 0 else "ok",
 n_crit = sum(1 for c in checks if c[0] == "crit")
 n_warn = sum(1 for c in checks if c[0] == "warn")
 if n_crit:
-    st.error(f"❌ {n_crit} kritische Punkte, {n_warn} Warnungen — vor der "
-             "Planung beheben.")
+    st.error(f"❌ {n_crit} kritische Punkte, {n_warn} Hinweise — vor der "
+             "Planung beheben. (❌ = kritisch, ⚠️ = Hinweis)")
 elif n_warn:
-    st.warning(f"⚠️ {n_warn} Warnungen — Planung möglich, Punkte prüfen.")
+    st.warning(f"⚠️ {n_warn} Hinweise — Planung möglich, Punkte prüfen.")
 else:
     st.success("✅ Bereit zur Planung — alle Checks bestanden.")
 
