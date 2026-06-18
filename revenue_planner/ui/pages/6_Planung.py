@@ -50,7 +50,9 @@ all_filialen = [r["fil_nr"] for r in
                 conn.execute(
                     "SELECT fil_nr FROM filialen "
                     "WHERE COALESCE(flag_inaktiv,0)=0 AND COALESCE(flag_gesperrt,0)=0 "
-                    "ORDER BY fil_nr"
+                    "AND (eroeffnung_ende IS NULL OR eroeffnung_ende >= ?) "
+                    "ORDER BY fil_nr",
+                    (f"{planjahr}-01-01",)
                 ).fetchall()]
 
 run_mode = st.radio("Ausführen für", ["Alle Filialen", "Auswahl"])
@@ -146,13 +148,15 @@ def _de(val) -> str:
     return f"{float(val):,.0f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-def _load_plan_df_from_db(conn_db, plan_yr: int) -> pd.DataFrame | None:
-    """Load plan summary from DB for the given year. Returns None if no data."""
+def _load_plan_df_from_db(conn_db, plan_yr: int, active_fils: list) -> pd.DataFrame | None:
+    """Load plan summary from DB for the given year, restricted to active branches."""
     rows = conn_db.execute(
         "SELECT fil_nr, datum, ist_vj, budget FROM planung "
         "WHERE CAST(strftime('%Y', datum) AS INTEGER)=?",
         (plan_yr,),
     ).fetchall()
+    if rows and active_fils:
+        rows = [r for r in rows if r["fil_nr"] in set(active_fils)]
     if not rows:
         return None
     return pd.DataFrame([{
@@ -166,7 +170,7 @@ def _load_plan_df_from_db(conn_db, plan_yr: int) -> pd.DataFrame | None:
 # Decide data source: fresh calculation > existing DB data
 _use_fresh = ("last_plan_results" in st.session_state
               and st.session_state.get("last_plan_jahr") == planjahr)
-_db_df = None if _use_fresh else _load_plan_df_from_db(conn, planjahr)
+_db_df = None if _use_fresh else _load_plan_df_from_db(conn, planjahr, all_filialen)
 
 if _use_fresh or _db_df is not None:
     if _use_fresh:
