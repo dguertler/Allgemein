@@ -29,14 +29,15 @@ revenue_planner/
 │   ├── schema.py             # DDL + Migration (_migrate)
 │   └── importer.py           # IST-Import, detect_oeffnungstage
 ├── planning/
-│   ├── engine.py             # Kern-Planungslogik (PlanningEngine, PlanParams)
-│   ├── datumsmapping.py      # Datumsmapping-Generator
+│   ├── engine.py             # Kern-Planungslogik Logik 1 (PlanningEngine → planung)
+│   ├── engine2.py            # Alternative Logik 2 (PlanningEngine2 → planung2)
+│   ├── datumsmapping.py      # Datumsmapping-Generator (von beiden Logiken genutzt)
 │   └── export.py             # Excel-Export
-├── tests/                    # pytest-Regressionssuite
+├── tests/                    # pytest-Regressionssuite (inkl. test_engine2.py)
 └── ui/
     ├── session.py            # get_conn(), get_gmbh(), require_db(), get_budgetjahr()
     ├── assets/               # Logos
-    └── pages/                # 1_Startseite … 14_Validierung
+    └── pages/                # 1_Startseite … 17_Planungsgenauigkeit2 (Logik 2 = 15/16/17)
 docs/
 ├── architecture.md           # Schema, Datenfluss, Engine-Logik, Stolperfallen
 ├── ui-patterns.md            # UI-Seiten, Patterns, Formatierung
@@ -49,7 +50,7 @@ docs/
 
 | Aufgabe | Doc lesen |
 |---------|-----------|
-| Änderungen an `engine.py`, `schema.py`, `datumsmapping.py`, `importer.py` | `Read docs/architecture.md` |
+| Änderungen an `engine.py`, `engine2.py`, `schema.py`, `datumsmapping.py`, `importer.py` | `Read docs/architecture.md` |
 | Änderungen an `ui/pages/*.py` oder `app.py` | `Read docs/ui-patterns.md` |
 | Neue Features planen, TODOs prüfen, Sitzungsende | `Read docs/open-issues.md` |
 

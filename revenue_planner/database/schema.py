@@ -220,6 +220,39 @@ CREATE TABLE IF NOT EXISTS planung (
     PRIMARY KEY (fil_nr, datum)
 );
 CREATE INDEX IF NOT EXISTS idx_planung_datum ON planung(datum);
+
+-- ── Computed plan — LOGIC 2 (alternative engine, see planning/engine2.py) ──
+-- Identical structure to `planung`. A parallel calculation method kept side by
+-- side so both results can be compared before one engine is removed.
+CREATE TABLE IF NOT EXISTS planung2 (
+    fil_nr          TEXT NOT NULL,
+    datum           TEXT NOT NULL,
+    wochentag       INTEGER NOT NULL,
+    bundesland      TEXT,
+    ist_vj          REAL,
+    eff_oeffnung    REAL,
+    eff_verteilung  REAL,
+    eff_wochentag   REAL,
+    eff_preis       REAL,
+    eff_ferien      REAL,
+    eff_feiertag    REAL,
+    eff_norm        REAL,
+    budget          REAL,
+    monat_basis     REAL,
+    monat_hoch      REAL,
+    monat_plan      REAL,
+    monatsumsatz_ist_hoch REAL,
+    monatsumsatz_plan REAL,
+    tagesumsatz_plan  REAL,
+    liefer_plan     REAL,
+    gesamt_plan     REAL,
+    tagestyp        TEXT,
+    feiertag_name   TEXT,
+    ferien_art      TEXT,
+    normalisierung  REAL,
+    PRIMARY KEY (fil_nr, datum)
+);
+CREATE INDEX IF NOT EXISTS idx_planung2_datum ON planung2(datum);
 """
 
 
@@ -342,3 +375,37 @@ def _migrate(conn: sqlite3.Connection):
         if col not in plan_cols:
             typ = "TEXT" if col == "bundesland" else "REAL"
             conn.execute(f"ALTER TABLE planung ADD COLUMN {col} {typ}")
+
+    # Logic-2 result table (mirror of planung). Created here too so existing
+    # databases gain it without a schema rebuild.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS planung2 (
+            fil_nr          TEXT NOT NULL,
+            datum           TEXT NOT NULL,
+            wochentag       INTEGER NOT NULL,
+            bundesland      TEXT,
+            ist_vj          REAL,
+            eff_oeffnung    REAL,
+            eff_verteilung  REAL,
+            eff_wochentag   REAL,
+            eff_preis       REAL,
+            eff_ferien      REAL,
+            eff_feiertag    REAL,
+            eff_norm        REAL,
+            budget          REAL,
+            monat_basis     REAL,
+            monat_hoch      REAL,
+            monat_plan      REAL,
+            monatsumsatz_ist_hoch REAL,
+            monatsumsatz_plan REAL,
+            tagesumsatz_plan  REAL,
+            liefer_plan     REAL,
+            gesamt_plan     REAL,
+            tagestyp        TEXT,
+            feiertag_name   TEXT,
+            ferien_art      TEXT,
+            normalisierung  REAL,
+            PRIMARY KEY (fil_nr, datum)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_planung2_datum ON planung2(datum)")

@@ -172,6 +172,51 @@ class PlanParams:
 
 ---
 
+## Zweite Berechnungslogik (Logik 2) — engine2.py
+
+Parallel zu `engine.py` existiert eine **alternative Engine** `planning/engine2.py`
+(`PlanningEngine2`). Beide laufen bewusst nebeneinander, bis entschieden ist, welche
+Logik besser plant — dann wird die unterlegene entfernt (offener Punkt #17).
+
+- **Ergebnis-Tabelle:** `planung2` (strukturgleich zu `planung`, additive in
+  `schema.py` DDL + `_migrate()`).
+- **UI:** Seiten `15_Planung2`, `16_Herleitung2`, `17_Planungsgenauigkeit2`
+  (Navigationsgruppe „Logik 2 (alternativ)"). Identische Übersichten wie Logik 1,
+  lesen/schreiben aber `planung2`.
+- **Wiederverwendung:** `PlanningEngine2` komponiert intern eine `PlanningEngine`
+  (`self.e`) und nutzt deren geladene Referenzdaten (Basisfenster, IST, Öffnung,
+  Feiertage/Ferien, **dasselbe** `datumsmapping`).
+
+### Vorgehen Logik 2 (Monatsumsatz-basiert)
+1. **Ausgangspunkt:** IST-Monatsumsatz des Basiszeitraums je Monat (`M0`,
+   via `e._base_month_ist`).
+2. **Wochentagsanteile** global über das ganze Basisjahr (`_weekday_share`),
+   Sondertage/Feiertage/Feiertagstage/Ferien ausgeschlossen
+   (`_excluded_base_dates`). Anteil = Σ Wochentagsumsatz / Σ Normaltagsumsatz.
+3. **Wochentags-Konstellation:** Pro Monat `M1 = Σ_wt cnt_plan[wt] × (M0·share[wt]/cnt_base[wt])`.
+   Mehr/weniger Mo…So im Planjahr verschiebt den Monatsumsatz (→ `eff_wochentag`).
+4. **Sondertag-/Feiertag-/Ferien-Monatsverschiebung:** nur wenn ein Sondertag im
+   Budgetjahr in einen **anderen Monat** fällt als im Basisjahr. Aufschlag =
+   Basis-IST des Tages − Ø gleicher Wochentag der 3 Nachbarmonate
+   (`_neighbour_weekday_avg`). Budgetmonat `+=`, Ursprungsmonat `−=`
+   (→ `eff_feiertag` bzw. `eff_ferien`). **Jahresweise nullsummig** (Golden bleibt stabil).
+5. **Preis:** `M3 = M2 × e._growth(fil, month)` (→ `eff_preis`).
+6. **Tagesverteilung:** `budget(d) = M3 × base_ist(d) / Σ_offene base_ist`, wobei
+   `base_ist(d)` der IST des via Datumsmapping bestimmten Basistags ist.
+
+### Additive Identität (wie Logik 1, exakt)
+```
+budget = ist_vj + eff_oeffnung + eff_verteilung + eff_wochentag
+       + eff_preis + eff_ferien + eff_feiertag + eff_norm
+```
+- `ist_vj` = base_ist(d); geschlossene Tage: `budget=0`, `eff_oeffnung=−ist_vj`.
+- `eff_verteilung` (= `w·M0 − ist_vj`) und `eff_norm` (Rundungsrest) sind in der UI
+  ausgeblendet (wie Logik 1).
+- Test-Suite: `tests/test_engine2.py` (Identität, Monatsnormierung, 365 Tage,
+  geschlossene Tage, eigener Golden-Run, Save→`planung2`).
+
+---
+
 ## Stolperfallen
 
 ### Bundesland-Dreifachformat

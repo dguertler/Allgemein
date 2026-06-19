@@ -6,6 +6,14 @@
 
 ## Behoben ✅
 
+- **Zweite Berechnungslogik (Logik 2)** parallel implementiert: `planning/engine2.py`
+  (`PlanningEngine2`), Tabelle `planung2`, UI-Seiten 15/16/17 (Planung/Herleitung/
+  Planungsgenauigkeit, jeweils „L2"), Navigationsgruppe „Logik 2 (alternativ)".
+  Vorgehen: Monatsumsatz-Vorjahr als Ausgangspunkt → Wochentags-Konstellation
+  (globale Wochentagsanteile) → Preis → Sondertag-/Feiertag-/Ferien-Monatsverschiebung
+  → Verteilung über Datumsmapping-Basistagsanteile. Gleiche additive Identität wie
+  Logik 1 (Tests `tests/test_engine2.py`, eigener Golden-Run). Ziel: vergleichen,
+  welche Logik besser ist, dann eine entfernen (06/2026)
 - Datumsmapping/Ferien: Weihnachtsferien-Jahresgrenze korrekt gematcht — Januar-Plantage vergleichen mit Januar-VJ (nicht mehr 20.–31.12.); `match_ferien_periods()` per nächstem Startdatum (06/2026)
 - Datumsmapping: Ferien-Plantage werden IMMER mit Ferientagen der VJ-Periode verglichen (Pfingst-/Sommer-/Herbst-/Weihnachtsferien) — Same-Month-Constraint entfernt, robuste Wochentags-/Wochen-Zuordnung innerhalb der VJ-Periode (06/2026)
 - Datumsmapping: 24./31.12. als Quasi-Feiertage — nie Basistag für Normal-/Ferientage; Plan-24./31.12. → gleicher Kalendertag im Basisjahr (06/2026)
@@ -76,6 +84,7 @@
 
 | # | Thema | Risiko/Nutzen |
 |---|-------|---------------|
+| 17 | **Logik-Entscheidung**: Logik 1 (`engine.py`/`planung`) vs. Logik 2 (`engine2.py`/`planung2`) anhand realer Planungsgenauigkeit vergleichen, dann die unterlegene Logik inkl. Tabelle/Seiten/Tests entfernen | Hoch |
 | 2 | **Sondertage-Legacy** abbauen: `sondertage`-Tabelle abschaffen, nur noch `feiertage` mit art='Sondertag' | Mittelfristig |
 | 4 | **Engine-Performance**: `_ist_on()` O(Tage×Zeilen). Lösung: Lookup-Dict `{(fil_nr, iso): umsatz}` einmalig bauen | Laufzeit |
 | 16 | **Herleitung: Neue Ferien ohne Vorjahreszeitraum**: Grundlogik implementiert via `_ferien_faktor_fallback` (letzten gleichen/beliebigen Ferientyp des BL verwenden). Noch zu prüfen: Qualität der Schätzung in der Praxis. | Niedrig |
