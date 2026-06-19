@@ -21,9 +21,9 @@ from .conftest import BRANCH_FACTORS, PLANJAHR, STICHTAG
 
 
 GOLDEN_ANNUAL_BUDGET_2 = {
-    "0001": 422028.77,
-    "0002": 624398.08,
-    "0003": 333012.44,
+    "0001": 419179.41,
+    "0002": 620238.15,
+    "0003": 330793.76,
 }
 
 

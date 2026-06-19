@@ -219,18 +219,17 @@ class PlanningEngine2:
         override_val: dict[int, float | None] = {}
         day_meta: dict[int, list[dict]] = {}
 
+        cnt_base_by_month: dict[int, dict] = {}
+        cnt_plan_by_month: dict[int, dict] = {}
+
         for month in range(1, 13):
             ov, is_special_month = self._month_override(fil_nr, fil, month)
             override_val[month] = ov
             base_m = e._base_month_ist(fil_nr, fil, month)
             m0[month] = base_m
             by = self.base_year_for_month(month)
-            cnt_base = e._count_weekdays(by, month)
-            cnt_plan = e._count_weekdays(py, month)
-            # Per-occurrence Basiswert je Wochentag aus globalem Anteil
-            perday = {w: (base_m * share_wt.get(w, 0.0) / cnt_base[w])
-                      if cnt_base[w] > 0 else 0.0 for w in range(7)}
-            m1[month] = sum(cnt_plan[w] * perday[w] for w in range(7))
+            cnt_base_by_month[month] = e._count_weekdays(by, month)
+            cnt_plan_by_month[month] = e._count_weekdays(py, month)
 
             dim = pd.Period(f"{py}-{month:02d}").days_in_month
             metas = []
@@ -247,6 +246,20 @@ class PlanningEngine2:
                     "base_ist": base_ist, "mapping_art": art,
                 })
             day_meta[month] = metas
+
+        # Jährlicher Durchschnitts-Tagesumsatz je Wochentag (nur Normaltage).
+        # d_w[w] = jährl. Gesamtumsatz × globalem Wochentagsanteil / Anzahl Basisjahr-Vorkommen.
+        # Konstellationseffekt je Monat: m0 + Δ × d_w → Jahressumme bleibt (fast) erhalten.
+        R_annual = sum(m0.values())
+        cnt_year_base = {w: sum(cnt_base_by_month[mo].get(w, 0) for mo in range(1, 13))
+                         for w in range(7)}
+        d_w = {w: (R_annual * share_wt.get(w, 0.0) / cnt_year_base[w])
+               if cnt_year_base[w] > 0 else 0.0 for w in range(7)}
+        for month in range(1, 13):
+            cb = cnt_base_by_month[month]
+            cp = cnt_plan_by_month[month]
+            m1[month] = m0[month] + sum(
+                (cp.get(w, 0) - cb.get(w, 0)) * d_w[w] for w in range(7))
 
         # Phase 2: Auf-/Abschlag-Verschiebung zwischen Monaten
         for month in range(1, 13):
